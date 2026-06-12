@@ -94,7 +94,7 @@ CORS_ALLOW_METHODS = [
 CORS_ALLOW_HEADERS = [
     "accept", "accept-encoding", "authorization", "content-type",
     "dnt", "origin", "user-agent", "x-csrftoken",
-    "x-requested-with", "x-invite-token",
+    "x-requested-with", "x-invite-token", "X-Invite-Token",
 ]
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

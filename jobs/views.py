@@ -269,8 +269,8 @@ class ManualScreenInView(APIView):
 
 class BatchEmailView(APIView):
     """
-    HR sends exam invite link to all screened-in candidates for a job.
-    For now prints to console (email backend = console in dev).
+    HR sends a unique exam invite to all screened-in candidates for a job.
+    Accepts test_id, creates a unique Invite per candidate, emails each their link.
     """
     permission_classes = [IsAuthenticated]
 
@@ -280,16 +280,26 @@ class BatchEmailView(APIView):
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 
-        exam_link = request.data.get("exam_link")
-        if not exam_link:
+        test_id = request.data.get("test_id")
+        if not test_id:
             return Response(
-                {"success": False, "error": "exam_link is required."},
+                {"success": False, "error": "test_id is required."},
                 status=400,
             )
 
-        screened_in = job.applications.filter(
-            status=Application.Status.SCREENED_IN
-        )
+        from assessments.models import Test
+        from invites.models import Invite
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from datetime import timedelta
+        from django.utils import timezone
+
+        try:
+            test = Test.objects.get(pk=test_id)
+        except Test.DoesNotExist:
+            return Response({"success": False, "error": "Test not found."}, status=404)
+
+        screened_in = job.applications.filter(status=Application.Status.SCREENED_IN)
 
         if not screened_in.exists():
             return Response(
@@ -297,32 +307,48 @@ class BatchEmailView(APIView):
                 status=400,
             )
 
-        from django.core.mail import send_mail
-        from django.conf import settings
-
+        frontend_url = getattr(settings, "FRONTEND_URL", "https://screening.oticgs.com")
+        duration_mins = test.duration_mins
         sent = 0
+
         for app in screened_in:
             try:
+                # Create a unique invite for this candidate
+                invite = Invite.objects.create(
+                    test=test,
+                    candidate_name=f"{app.first_name} {app.last_name}".strip(),
+                    candidate_email=app.email,
+                    created_by=request.user,
+                    expires_at=timezone.now() + timedelta(hours=48),
+                )
+                exam_link = f"{frontend_url}/c/{invite.token}"
+
                 send_mail(
-                    subject=f"You've been invited to take an assessment — {job.title}",
+                    subject=f"APPLICATION ASSESSMENT — {job.title}",
                     message=(
                         f"Dear {app.first_name},\n\n"
-                        f"Congratulations! You have been shortlisted for the "
-                        f"{job.title} position.\n\n"
+                        f"You have been invited to take an assessment for the "
+                        f"{job.title} position at OTIC Geosystems.\n\n"
                         f"Please complete your assessment using the link below:\n"
                         f"{exam_link}\n\n"
-                        f"This link is unique to you. Do not share it.\n\n"
-                        f"Best regards,\nOTIC Recruitment Team"
+                        f"IMPORTANT DETAILS:\n"
+                        f"- This link is unique to you. Do not share it.\n"
+                        f"- The assessment must be completed within 48 hours of receiving this email.\n"
+                        f"- The assessment duration is {duration_mins} minutes once started.\n"
+                        f"- Ensure you are in a quiet environment with a stable internet connection.\n"
+                        f"- Your webcam will be required throughout the assessment.\n\n"
+                        f"If you have any issues, reply to this email.\n\n"
+                        f"Best regards,\nOTIC Recruitment Team\nadmin@oticgs.com"
                     ),
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[app.email],
-                    fail_silently=True,
+                    fail_silently=False,
                 )
-                # Mark as invited
                 app.status = Application.Status.INVITED
                 app.save(update_fields=["status"])
                 sent += 1
-            except Exception:
+            except Exception as e:
+                print(f"Failed to send invite to {app.email}: {e}")
                 pass
 
         return success({"sent": sent, "total": screened_in.count()})

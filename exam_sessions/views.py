@@ -306,10 +306,11 @@ class SessionDetailView(APIView):
 
 
 class RecordingURLView(APIView):
-    """HR: get a time-limited signed URL to stream the session recording."""
+    """HR: get URL to stream the session recording chunks."""
     permission_classes = [IsAuthenticated]
-
     def get(self, request, pk):
+        import os
+        from django.conf import settings as django_settings
         try:
             session = Session.objects.get(
                 pk=pk, invite__test__created_by=request.user
@@ -318,14 +319,19 @@ class RecordingURLView(APIView):
             return Response(
                 {"success": False, "error": "Session not found."}, status=404
             )
-
-        if not session.recording_path:
+        recording_dir = os.path.join(django_settings.MEDIA_ROOT, "recordings", str(pk))
+        if not os.path.exists(recording_dir):
             return Response(
                 {"success": False, "error": "No recording available yet."}, status=404
             )
-
-        url = generate_signed_url(session.recording_path, expires_in=3600)
-        return success({"url": url, "expires_in_seconds": 3600})
+        chunks = sorted([f for f in os.listdir(recording_dir) if f.endswith(".webm")])
+        if not chunks:
+            return Response(
+                {"success": False, "error": "No recording chunks found."}, status=404
+            )
+        base_url = request.build_absolute_uri("/")
+        chunk_url = f"{base_url}media/recordings/{pk}/{chunks[0]}"
+        return success({"url": chunk_url, "expires_in_seconds": 3600})
 
 
 class ReviewAnswerView(APIView):
@@ -391,6 +397,11 @@ class SubmitResultView(APIView):
             for a in session.answers.all()
         )
         score_pct = round((earned / total_points * 100), 1) if total_points else 0
+
+        # Save the decision
+        session.status = Session.Status.REVIEWED
+        session.save(update_fields=["status"])
+
 
         return success({
             "decision": decision,

@@ -21,6 +21,7 @@ class Session(models.Model):
         IN_PROGRESS = "in_progress", "In Progress"
         SUBMITTED = "submitted", "Submitted"
         TIMED_OUT = "timed_out", "Timed Out"
+        REVIEWED = "reviewed", "Reviewed"
 
     invite = models.OneToOneField(
         "invites.Invite",
