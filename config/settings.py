@@ -120,6 +120,8 @@ CELERY_ACCEPT_CONTENT = ["json"]
 
 INVITE_EXPIRY_HOURS = int(os.environ.get("INVITE_EXPIRY_HOURS", 72))
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://screening.oticgs.com")
+# Shown in candidate emails and pages
+COMPANY_NAME = os.environ.get("COMPANY_NAME", "OTIC Geosystems")
 
 # ── Anthropic (Claude) — reads CVs and test papers (PDF / Word .docx) ────────
 # >>> PUT YOUR KEY IN THE SERVER'S .env FILE, NOT HERE: <<<

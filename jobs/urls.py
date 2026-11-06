@@ -11,11 +11,16 @@ from .views import (
     ScreenJobView,
     ManualScreenInView,
     BatchEmailView,
-    UpdatePreferredAnswersView,
+    JobLinkListCreateView,
+    JobLinkDetailView,
+    StandardQuestionsView,
+    ImportCvsView,
+    CvImportStatusView,
+    ResendFormView,
+    RemindAwaitingView,
 )
 
 urlpatterns = [
-    # HR — job management
     path("", JobPostListCreateView.as_view(), name="job-list-create"),
     path("<int:pk>/", JobPostDetailView.as_view(), name="job-detail"),
     path("<int:pk>/open/", OpenJobView.as_view(), name="job-open"),
@@ -23,13 +28,18 @@ urlpatterns = [
     path("<int:pk>/applications/", JobApplicationsView.as_view(), name="job-applications"),
     path("<int:pk>/screen/", ScreenJobView.as_view(), name="job-screen"),
     path("<int:pk>/applications/<int:app_id>/screen-in/", ManualScreenInView.as_view(), name="manual-screen-in"),
+    path("<int:pk>/applications/<int:app_id>/resend-form/", ResendFormView.as_view(), name="resend-form"),
+    path("<int:pk>/remind-awaiting/", RemindAwaitingView.as_view(), name="remind-awaiting"),
     path("<int:pk>/batch-email/", BatchEmailView.as_view(), name="batch-email"),
-    path("<int:pk>/preferred-answers/", UpdatePreferredAnswersView.as_view(), name="preferred-answers"),
+    path("<int:pk>/import-cvs/", ImportCvsView.as_view(), name="import-cvs"),
+    path("imports/<uuid:import_id>/", CvImportStatusView.as_view(), name="import-status"),
 
-    # Public — application form
+    path("links/", JobLinkListCreateView.as_view(), name="link-list-create"),
+    path("links/standard-questions/", StandardQuestionsView.as_view(), name="standard-questions"),
+    path("links/<int:pk>/", JobLinkDetailView.as_view(), name="link-detail"),
+
     path("apply/<slug:slug>/", PublicApplicationView.as_view(), name="job-apply"),
 
-    # HR — blacklist
     path("blacklist/", BlacklistListCreateView.as_view(), name="blacklist-list-create"),
     path("blacklist/<int:pk>/", BlacklistDetailView.as_view(), name="blacklist-detail"),
 ]

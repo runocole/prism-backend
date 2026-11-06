@@ -30,7 +30,7 @@ def build_invite_email(invite: Invite, job_title: str | None = None) -> tuple[st
     message = (
         f"Dear {first_name},\n\n"
         f"You have been invited to take an assessment for the {role} position "
-        f"at OTIC Geosystems.\n\n"
+        f"at {settings.COMPANY_NAME}.\n\n"
         f"Please complete your assessment using the link below:\n"
         f"{exam_link}\n\n"
         f"IMPORTANT DETAILS:\n"
@@ -42,7 +42,7 @@ def build_invite_email(invite: Invite, job_title: str | None = None) -> tuple[st
         f"stable internet connection.\n"
         f"- Your webcam will be required throughout the assessment.\n\n"
         f"If you have any issues, reply to this email.\n\n"
-        f"Best regards,\nOTIC Recruitment Team\nadmin@oticgs.com"
+        f"Best regards,\n{settings.COMPANY_NAME} Recruitment Team"
     )
     return subject, message
 

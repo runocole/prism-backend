@@ -5,8 +5,10 @@ Screening pipeline for job applications.
 
 Pipeline:
   1. Blacklist check — phone match, fuzzy name fallback
-  2. CV strength check — Claude reads the CV (PDF / Word) and scores it 0-100
-  3. MCQ answers check — against HR's preferred answers
+  2. CV check (optional) — Claude reads the CV (PDF / Word) and scores it 0-100
+  3. Preferred answers — the candidate's answers on their link vs HR's preferred answers
+
+The CV check is optional per job (JobPost.cv_ai_mode): off / rank only / rank + screen out.
 
 screen_applications() runs the pipeline for many applications and is
 started in a background thread by ScreenJobView.
@@ -20,7 +22,8 @@ from django.conf import settings
 from django.utils import timezone
 
 from config import ai
-from .models import Application, Blacklist
+from .models import Application, Blacklist, JobPost
+from .questions import check_preferred
 
 logger = logging.getLogger(__name__)
 
@@ -168,46 +171,16 @@ def check_cv_strength(application: Application) -> tuple[bool, str, float | None
     return passes, f"CV {score}/100 ({verdict}): {summary}", float(score), _clean_cv_details(result)
 
 
-# ── Step 3: MCQ answers check ─────────────────────────────────────────────────
+# ── Step 3: Preferred answers check ──────────────────────────────────────────
 
-def check_mcq_answers(application: Application) -> tuple[bool, str]:
-    preferred = application.job.preferred_answers or {}
-    candidate_answers = application.screening_answers or {}
-
-    failed_questions = []
-
-    for question_key, preferred_values in preferred.items():
-        if not preferred_values:
-            continue
-
-        candidate_answer = candidate_answers.get(question_key)
-
-        if candidate_answer is None:
-            continue
-
-        # Salary expectation — numeric comparison
-        if question_key == "salary_expectation":
-            try:
-                # Extract first number from candidate's answer
-                max_acceptable = float(str(preferred_values[0]).replace(",", "").replace("₦", "").strip())
-                # Extract first number from candidate answer
-                import re
-                nums = re.findall(r"[\d,]+", str(candidate_answer).replace(",", ""))
-                if nums:
-                    candidate_salary = float(nums[0])
-                    if candidate_salary > max_acceptable:
-                        failed_questions.append("salary expectation too high")
-            except (ValueError, TypeError):
-                pass  # Can't parse — skip
-            continue
-
-        # All other MCQ fields
-        if candidate_answer not in preferred_values:
-            failed_questions.append(question_key.replace("_", " "))
-
-    if failed_questions:
-        return False, f"Answer mismatch on: {', '.join(failed_questions)}"
-
+def check_answers(application: Application) -> tuple[bool, str]:
+    """Compare the candidate's answers with HR's preferred answers on their link."""
+    link = application.link
+    if not link:
+        return True, ""
+    mismatches = check_preferred(link.questions or [], application.screening_answers or {})
+    if mismatches:
+        return False, f"Answer mismatch on: {'; '.join(mismatches)}"
     return True, "All answers match preferred criteria."
 
 
@@ -215,15 +188,12 @@ def check_mcq_answers(application: Application) -> tuple[bool, str]:
 
 def run_screening(application: Application) -> dict:
     """
-    Run all three screening checks on an application.
+    Blacklist → (optional) CV check → preferred answers.
+    The CV check only runs if the job's cv_ai_mode is "rank" or "screen";
+    with "rank" the score is for sorting only and never screens anyone out.
     Sets application.status and returns a result dict.
     """
-    result = {
-        "blacklisted": False,
-        "cv_passes": True,
-        "mcq_passes": True,
-        "summary": "",
-    }
+    result = {"blacklisted": False, "cv_passes": True, "answers_pass": True, "summary": ""}
 
     # 1. Blacklist check
     if check_blacklist(application):
@@ -235,26 +205,32 @@ def run_screening(application: Application) -> dict:
         result["summary"] = "Blacklisted"
         return result
 
-    # 2. CV strength check
-    cv_passes, cv_summary, cv_score, cv_details = check_cv_strength(application)
-    result["cv_passes"] = cv_passes
-    application.ai_score = cv_score
-    application.ai_details = cv_details
+    summaries = []
 
-    # 3. MCQ answers check
-    mcq_passes, mcq_summary = check_mcq_answers(application)
-    result["mcq_passes"] = mcq_passes
+    # 2. CV check (AI) — only if switched on for this job
+    mode = application.job.cv_ai_mode
+    if mode in (JobPost.CvAiMode.RANK, JobPost.CvAiMode.SCREEN):
+        cv_passes, cv_summary, cv_score, cv_details = check_cv_strength(application)
+        application.ai_score = cv_score
+        application.ai_details = cv_details
+        if mode == JobPost.CvAiMode.SCREEN:
+            result["cv_passes"] = cv_passes
+        elif cv_score is not None:
+            cv_summary = cv_summary.replace(" (passes)", "").replace(
+                f" (below the pass mark of {settings.CV_PASS_SCORE})", ""
+            )
+        summaries.append(cv_summary)
 
-    # Combine summaries
-    summaries = [s for s in [cv_summary, mcq_summary] if s]
-    full_summary = " | ".join(summaries)
+    # 3. Preferred answers
+    answers_pass, answers_summary = check_answers(application)
+    result["answers_pass"] = answers_pass
+    summaries.append(answers_summary)
 
-    # Final decision
-    if cv_passes and mcq_passes:
-        application.status = Application.Status.SCREENED_IN
-    else:
-        application.status = Application.Status.SCREENED_OUT
-
+    full_summary = " | ".join(s for s in summaries if s)
+    passes = result["cv_passes"] and answers_pass
+    application.status = (
+        Application.Status.SCREENED_IN if passes else Application.Status.SCREENED_OUT
+    )
     application.ai_summary = full_summary
     application.ai_screened_at = timezone.now()
     application.save(update_fields=["status", "ai_score", "ai_details", "ai_summary", "ai_screened_at"])
