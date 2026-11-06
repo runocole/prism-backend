@@ -22,7 +22,6 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
 SUPPORTED_EXTENSIONS = (".pdf", ".docx")
 
 
@@ -101,13 +100,9 @@ def ask_about_document(
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=300.0)
 
-    response = client.beta.messages.create(
-        model=MODEL,
+    response = client.messages.create(
+        model=settings.AI_MODEL,
         max_tokens=16000,
-        # If a safety classifier declines, retry on Anthropic's recommended
-        # fallback model instead of failing.
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
         output_config={
             "effort": effort,
             "format": {"type": "json_schema", "schema": schema},

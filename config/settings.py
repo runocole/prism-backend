@@ -129,6 +129,11 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://screening.oticgs.com")
 # it) and "Upload questions" on the test builder shows a "not set up" error.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# Which Claude model to use. Haiku 5.5 is the low-cost option ($0.10 / $0.50
+# per million tokens in/out) — well under 1 cent per CV.
+# For better judgement at ~25x the cost, set AI_MODEL=claude-sonnet-5-5.
+AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-5-5")
+
 # Minimum AI CV score (0–100) to be screened in.
 CV_PASS_SCORE = int(os.environ.get("CV_PASS_SCORE", 50))
 

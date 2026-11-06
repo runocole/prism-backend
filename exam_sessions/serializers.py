@@ -19,12 +19,14 @@ class AnswerSerializer(serializers.ModelSerializer):
     question_type = serializers.CharField(source="question.type", read_only=True)
     question_body = serializers.CharField(source="question.body", read_only=True)
     question_points = serializers.IntegerField(source="question.points", read_only=True)
+    graded_by_name = serializers.CharField(source="graded_by.full_name", read_only=True, default=None)
 
     class Meta:
         model = Answer
         fields = (
             "id", "question", "question_type", "question_body", "question_points",
             "response", "is_correct", "auto_score", "manual_score", "reviewer_comment",
+            "graded_by_name", "graded_at",
         )
         read_only_fields = ("is_correct", "auto_score")
 
@@ -40,6 +42,7 @@ class SessionSerializer(serializers.ModelSerializer):
     candidate_email = serializers.CharField(source="invite.candidate_email", read_only=True)
     test_title = serializers.CharField(source="invite.test.title", read_only=True)
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True, default=None)
+    graded_by_name = serializers.CharField(read_only=True)
 
     class Meta:
         model = Session
@@ -48,6 +51,7 @@ class SessionSerializer(serializers.ModelSerializer):
             "status", "started_at", "submitted_at", "remaining_seconds",
             "recording_path", "violation_count", "answers", "violations",
             "decision", "decision_notes", "score_pct", "reviewed_by_email", "reviewed_at",
+            "graded_by_name",
         )
 
 

@@ -48,9 +48,7 @@ class InviteListCreateView(APIView):
 
     def get(self, request):
         """List invites. Optional ?test_id= query param to filter by test."""
-        invites = Invite.objects.filter(
-            created_by=request.user
-        ).select_related("test")
+        invites = Invite.objects.select_related("test")
 
         test_id = request.query_params.get("test_id")
         if test_id:
@@ -69,7 +67,6 @@ class InviteListCreateView(APIView):
         try:
             test = Test.objects.get(
                 pk=d["test_id"],
-                created_by=request.user,
                 status=Test.Status.PUBLISHED,
             )
         except Test.DoesNotExist:
@@ -113,7 +110,6 @@ class BatchInviteCreateView(APIView):
         try:
             test = Test.objects.get(
                 pk=d["test_id"],
-                created_by=request.user,
                 status=Test.Status.PUBLISHED,
             )
         except Test.DoesNotExist:
@@ -163,7 +159,7 @@ class InviteDetailView(APIView):
 
     def get(self, request, pk):
         try:
-            invite = Invite.objects.get(pk=pk, created_by=request.user)
+            invite = Invite.objects.get(pk=pk)
         except Invite.DoesNotExist:
             return Response(
                 {"success": False, "error": "Invite not found."}, status=404
@@ -179,7 +175,7 @@ class RevokeInviteView(APIView):
     def post(self, request, pk):
         """Revoke a pending invite so the link immediately stops working."""
         try:
-            invite = Invite.objects.get(pk=pk, created_by=request.user)
+            invite = Invite.objects.get(pk=pk)
         except Invite.DoesNotExist:
             return Response(
                 {"success": False, "error": "Invite not found."}, status=404

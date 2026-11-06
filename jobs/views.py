@@ -53,7 +53,7 @@ class JobPostListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        jobs = JobPost.objects.filter(created_by=request.user)
+        jobs = JobPost.objects.all()
         return success(JobPostSerializer(jobs, many=True).data)
 
     def post(self, request):
@@ -68,7 +68,7 @@ class JobPostDetailView(APIView):
 
     def _get_job(self, pk, user):
         try:
-            return JobPost.objects.get(pk=pk, created_by=user)
+            return JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return None
 
@@ -93,7 +93,7 @@ class OpenJobView(APIView):
 
     def post(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
         job.status = JobPost.Status.OPEN
@@ -106,7 +106,7 @@ class CloseJobView(APIView):
 
     def post(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
         job.status = JobPost.Status.CLOSED
@@ -120,7 +120,7 @@ class JobApplicationsView(APIView):
 
     def get(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 
@@ -226,7 +226,7 @@ class ScreenJobView(APIView):
 
     def post(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 
@@ -262,7 +262,6 @@ class ManualScreenInView(APIView):
             application = Application.objects.get(
                 pk=app_id,
                 job__pk=pk,
-                job__created_by=request.user,
             )
         except Application.DoesNotExist:
             return Response({"success": False, "error": "Application not found."}, status=404)
@@ -285,7 +284,7 @@ class BatchEmailView(APIView):
 
     def post(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 
@@ -301,7 +300,7 @@ class BatchEmailView(APIView):
 
         try:
             test = Test.objects.get(
-                pk=test_id, created_by=request.user, status=Test.Status.PUBLISHED
+                pk=test_id, status=Test.Status.PUBLISHED
             )
         except Test.DoesNotExist:
             return Response({"success": False, "error": "Published test not found."}, status=404)
@@ -360,7 +359,7 @@ class UpdatePreferredAnswersView(APIView):
 
     def post(self, request, pk):
         try:
-            job = JobPost.objects.get(pk=pk, created_by=request.user)
+            job = JobPost.objects.get(pk=pk)
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 

@@ -43,7 +43,7 @@ class TestListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        tests = Test.objects.filter(created_by=request.user)
+        tests = Test.objects.all()
         return success(TestListSerializer(tests, many=True).data)
 
     def post(self, request):
@@ -58,7 +58,7 @@ class TestDetailView(APIView):
 
     def _get_test(self, pk, user):
         try:
-            return Test.objects.get(pk=pk, created_by=user)
+            return Test.objects.get(pk=pk)
         except Test.DoesNotExist:
             return None
 
@@ -107,7 +107,7 @@ class PublishTestView(APIView):
     def post(self, request, pk):
         """Publish a draft. Once published it cannot be edited — only archived."""
         try:
-            test = Test.objects.get(pk=pk, created_by=request.user)
+            test = Test.objects.get(pk=pk)
         except Test.DoesNotExist:
             return Response(
                 {"success": False, "error": "Test not found."}, status=404
@@ -132,7 +132,7 @@ class QuestionListCreateView(APIView):
 
     def _get_draft_test(self, pk, user):
         try:
-            return Test.objects.get(pk=pk, created_by=user, status=Test.Status.DRAFT)
+            return Test.objects.get(pk=pk, status=Test.Status.DRAFT)
         except Test.DoesNotExist:
             return None
 
@@ -158,7 +158,6 @@ class QuestionDetailView(APIView):
             return Question.objects.get(
                 pk=q_pk,
                 test__pk=test_pk,
-                test__created_by=user,
                 test__status=Test.Status.DRAFT,
             )
         except Question.DoesNotExist:

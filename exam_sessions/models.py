@@ -80,6 +80,19 @@ class Session(models.Model):
         return max(duration - self.elapsed_seconds, 0)
 
     @property
+    def graded_by_name(self):
+        """Who made the final decision, or else who last graded an answer."""
+        if self.reviewed_by:
+            return self.reviewed_by.full_name
+        last = (
+            self.answers.filter(graded_by__isnull=False)
+            .select_related("graded_by")
+            .order_by("-graded_at")
+            .first()
+        )
+        return last.graded_by.full_name if last else None
+
+    @property
     def is_expired(self):
         return self.remaining_seconds == 0
 
@@ -108,6 +121,14 @@ class Answer(models.Model):
     # Set manually by a reviewer for short answer questions
     manual_score = models.FloatField(null=True, blank=True)
     reviewer_comment = models.TextField(blank=True)
+    graded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="answers_graded",
+    )
+    graded_at = models.DateTimeField(null=True, blank=True)
 
     saved_at = models.DateTimeField(auto_now=True)
 

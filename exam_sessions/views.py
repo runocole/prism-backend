@@ -265,13 +265,13 @@ class UploadRecordingChunkView(APIView):
 # ─── HR / Reviewer Views ──────────────────────────────────────────────────────
 
 class SessionListView(APIView):
-    """HR: list all sessions across all their tests."""
+    """Staff: list all sessions (every staff account sees all of them)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sessions = Session.objects.filter(
-            invite__test__created_by=request.user
-        ).select_related("invite__test", "invite").order_by("-started_at")
+        sessions = Session.objects.select_related(
+            "invite__test", "invite", "reviewed_by"
+        ).order_by("-started_at")
 
         data = [
             {
@@ -286,6 +286,7 @@ class SessionListView(APIView):
                 "decision": s.decision,
                 "score_pct": s.score_pct,
                 "reviewed_at": s.reviewed_at,
+                "graded_by_name": s.graded_by_name,
             }
             for s in sessions
         ]
@@ -299,7 +300,7 @@ class SessionDetailView(APIView):
     def get(self, request, pk):
         try:
             session = Session.objects.get(
-                pk=pk, invite__test__created_by=request.user
+                pk=pk
             )
         except Session.DoesNotExist:
             return Response(
@@ -316,7 +317,7 @@ class RecordingURLView(APIView):
         from django.conf import settings as django_settings
         try:
             session = Session.objects.get(
-                pk=pk, invite__test__created_by=request.user
+                pk=pk
             )
         except Session.DoesNotExist:
             return Response(
@@ -346,7 +347,6 @@ class ReviewAnswerView(APIView):
             answer = Answer.objects.get(
                 pk=answer_id,
                 session__pk=pk,
-                session__invite__test__created_by=request.user,
             )
         except Answer.DoesNotExist:
             return Response(
@@ -362,9 +362,15 @@ class ReviewAnswerView(APIView):
 
         answer.manual_score = score
         answer.reviewer_comment = serializer.validated_data.get("reviewer_comment", "")
-        answer.save(update_fields=["manual_score", "reviewer_comment"])
+        answer.graded_by = request.user
+        answer.graded_at = timezone.now()
+        answer.save(update_fields=["manual_score", "reviewer_comment", "graded_by", "graded_at"])
 
-        return success({"answer_id": answer.id, "manual_score": answer.manual_score})
+        return success({
+            "answer_id": answer.id,
+            "manual_score": answer.manual_score,
+            "graded_by_name": request.user.full_name,
+        })
 
 
 class SubmitResultView(APIView):
@@ -379,7 +385,7 @@ class SubmitResultView(APIView):
     def post(self, request, pk):
         try:
             session = Session.objects.prefetch_related("answers__question").get(
-                pk=pk, invite__test__created_by=request.user
+                pk=pk
             )
         except Session.DoesNotExist:
             return Response(
