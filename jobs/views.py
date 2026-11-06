@@ -44,6 +44,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from config.background import run_in_background
 
+from .blacklist_import import BlacklistFileError, import_blacklist
 from .imports import process_cv_import, send_form_email
 from .models import JobPost, JobLink, Application, Blacklist, CvImport
 from .questions import STANDARD_QUESTIONS, clean_answers, public_questions
@@ -473,6 +474,24 @@ class BlacklistDetailView(APIView):
             return Response({"success": False, "error": "Not found."}, status=404)
         entry.delete()
         return success("Removed from blacklist.")
+
+
+class BlacklistImportView(APIView):
+    """POST /api/v1/jobs/blacklist/import/ (multipart: file=<.xlsx or .csv>)"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        f = request.FILES.get("file")
+        if not f:
+            return Response({"success": False, "error": "No file uploaded."}, status=400)
+        if f.size > 5 * 1024 * 1024:
+            return Response({"success": False, "error": "File is too large (max 5 MB)."}, status=400)
+        try:
+            result = import_blacklist(f.read(), f.name, added_by=request.user)
+        except BlacklistFileError as exc:
+            return Response({"success": False, "error": str(exc)}, status=400)
+        return success(result, status.HTTP_201_CREATED)
     
 
 class ScreenJobView(APIView):

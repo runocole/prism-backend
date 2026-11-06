@@ -11,3 +11,4 @@ redis==5.0.4
 anthropic==2.6.0
 python-docx==1.2.0
 pypdf==5.9.0
+openpyxl==3.1.5

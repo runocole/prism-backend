@@ -8,6 +8,7 @@ from .views import (
     PublicApplicationView,
     BlacklistListCreateView,
     BlacklistDetailView,
+    BlacklistImportView,
     ScreenJobView,
     ManualScreenInView,
     BatchEmailView,
@@ -41,5 +42,6 @@ urlpatterns = [
     path("apply/<slug:slug>/", PublicApplicationView.as_view(), name="job-apply"),
 
     path("blacklist/", BlacklistListCreateView.as_view(), name="blacklist-list-create"),
+    path("blacklist/import/", BlacklistImportView.as_view(), name="blacklist-import"),
     path("blacklist/<int:pk>/", BlacklistDetailView.as_view(), name="blacklist-detail"),
 ]
