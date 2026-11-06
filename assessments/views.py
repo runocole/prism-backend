@@ -205,46 +205,68 @@ class ParsePdfView(APIView):
         return Response({"success": True, "data": questions})
 
     def _parse_questions(self, text: str) -> list:
+        import urllib.request
+        import json
         import re
-        questions = []
-        blocks = re.split(r'\n(?=Q?\d+[\.\)])', text.strip())
 
-        for block in blocks:
-            block = block.strip()
-            if not block:
-                continue
+        prompt = (
+            "You are a test paper parser. Extract all exam questions from the text below.\n\n"
+            "Rules:\n"
+            "- SKIP all header text, company name, address, instructions, and name/date/phone input fields\n"
+            "- For each numbered question, determine if it is mcq (has lettered options a/b/c/d) or short_answer\n"
+            "- For MCQ: extract the full question as prompt, all options (without the A/B/C prefix), correct_index (0-based, default 0 if not stated)\n"
+            "- For short_answer: extract the full question text as prompt\n"
+            "- Split multi-part questions like 5a) 5b) into separate questions, each with its full text\n"
+            "- Only add [See diagram] to the prompt if the question explicitly says to refer to a diagram, figure or example table shown above\n"
+            "- Always set points to 5\n"
+            "- Return ONLY a valid JSON array, no markdown fences, no explanation\n\n"
+            "Format:\n"
+            "[\n"
+            "  {\"type\": \"mcq\", \"prompt\": \"...\", \"options\": [\"...\"], \"correct_index\": 0, \"points\": 5},\n"
+            "  {\"type\": \"short_answer\", \"prompt\": \"...\", \"points\": 5}\n"
+            "]\n\n"
+            "Text:\n" + text
+        )
 
-            lines = [l.strip() for l in block.split('\n') if l.strip()]
-            if not lines:
-                continue
+        payload = json.dumps({
+            "model": "llama-3.1-8b-instant",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode()
 
-            prompt = re.sub(r'^Q?\d+[\.\)]\s*', '', lines[0])
-            options = []
-            correct_index = 0
+        from django.conf import settings
+        api_key = getattr(settings, "GROK_API_KEY", "")
 
-            for line in lines[1:]:
-                opt_match = re.match(r'^([A-D])[\.\)]\s*(.+)', line)
-                if opt_match:
-                    options.append(opt_match.group(2))
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
 
-                answer_match = re.match(r'^[Aa]nswer\s*[:=]\s*([A-D])', line)
-                if answer_match:
-                    letter = answer_match.group(1).upper()
-                    correct_index = ord(letter) - ord('A')
+        try:
+            import subprocess
+            curl_result = subprocess.run([
+                "curl", "-s", "-X", "POST",
+                "https://api.groq.com/openai/v1/chat/completions",
+                "-H", "Content-Type: application/json",
+                "-H", f"Authorization: Bearer {api_key}",
+                "-d", payload.decode()
+            ], capture_output=True, text=True, timeout=60)
+            result = json.loads(curl_result.stdout)
+            raw = result["choices"][0]["message"]["content"].strip()
+            raw = re.sub(r"^```json|^```|```$", "", raw, flags=re.MULTILINE).strip()
+            parsed = json.loads(raw)
+            # Normalize question_type -> type
+            for q in parsed:
+                if "question_type" in q and "type" not in q:
+                    q["type"] = q.pop("question_type")
+                if "correct_index" not in q:
+                    q["correct_index"] = 0
+            return parsed
+        except Exception as e:
+            return []
 
-            if options:
-                questions.append({
-                    "type": "mcq",
-                    "prompt": prompt,
-                    "options": options,
-                    "correct_index": correct_index,
-                    "points": 5,
-                })
-            else:
-                questions.append({
-                    "type": "short_answer",
-                    "prompt": prompt,
-                    "points": 5,
-                })
-
-        return questions
