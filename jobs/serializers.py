@@ -5,83 +5,86 @@ jobs/serializers.py
 
 import re
 
+from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 
 from .models import JobPost, JobLink, Application, Blacklist, CvImport
-from .questions import QuestionError, validate_questions
+from .questions import QuestionError, strip_preferences, validate_questions
 
 
 class JobPostSerializer(serializers.ModelSerializer):
-    application_count = serializers.IntegerField(
-        source="applications.count", read_only=True
-    )
-    # URL of the job's first active "Job link", if it has been posted
+    application_count = serializers.IntegerField(source="applications.count", read_only=True)
+    # Public URL once the job is posted with a link
     application_url = serializers.SerializerMethodField()
-    link_count = serializers.IntegerField(source="links.count", read_only=True)
+    apply_link_name = serializers.CharField(source="apply_link.name", read_only=True, default=None)
 
     class Meta:
         model = JobPost
         fields = (
             "id", "title", "department", "description", "requirements",
-            "slug", "status", "cv_ai_mode",
-            "application_count", "application_url", "link_count", "created_at",
+            "slug", "status", "cv_ai_mode", "apply_link", "apply_link_name", "preferences",
+            "application_count", "application_url", "created_at",
         )
-        read_only_fields = ("slug", "status", "created_at", "application_url")
+        read_only_fields = ("slug", "status", "apply_link", "preferences", "created_at", "application_url")
+
+    def validate_department(self, value):
+        value = " ".join((value or "").split())
+        if not value:
+            raise serializers.ValidationError("Department is required.")
+        return value[:255]
 
     def get_application_url(self, obj):
-        link = obj.links.filter(kind=JobLink.Kind.APPLY, is_active=True).order_by("created_at").first()
-        return link.url if link else None
+        return f"{settings.FRONTEND_URL}/apply/{obj.slug}" if obj.apply_link_id else None
 
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 RESERVED_SLUGS = {"admin", "api", "hr", "c", "apply", "login", "static", "media"}
 
 
+def clean_job_slug(value: str, job=None) -> str:
+    """Validate the custom part of a job's URL. Raises serializers.ValidationError."""
+    value = slugify(value or "")[:120]
+    if not value or not SLUG_RE.match(value):
+        raise serializers.ValidationError("Use letters, numbers and dashes, e.g. gis-analyst-2026.")
+    if value in RESERVED_SLUGS:
+        raise serializers.ValidationError("That address is reserved. Pick another.")
+    clash = JobPost.objects.filter(slug=value)
+    if job:
+        clash = clash.exclude(pk=job.pk)
+    if clash.exists():
+        raise serializers.ValidationError("That link address is already used by another job.")
+    return value
+
+
 class JobLinkSerializer(serializers.ModelSerializer):
-    url = serializers.CharField(read_only=True)
-    job_title = serializers.CharField(source="job.title", read_only=True)
-    job_status = serializers.CharField(source="job.status", read_only=True)
+    """A reusable, named set of questions."""
     response_count = serializers.SerializerMethodField()
-    # Plain text in; validate_slug turns "GIS Analyst 2026" into "gis-analyst-2026"
-    slug = serializers.CharField(max_length=120)
+    used_by = serializers.SerializerMethodField()
 
     class Meta:
         model = JobLink
-        fields = (
-            "id", "job", "job_title", "job_status", "kind", "name", "slug", "intro",
-            "questions", "is_active", "url", "response_count", "created_at",
-        )
+        fields = ("id", "name", "intro", "questions", "is_active", "response_count", "used_by", "created_at")
         read_only_fields = ("created_at",)
 
     def get_response_count(self, obj):
         return obj.applications.exclude(status=Application.Status.AWAITING_FORM).count()
 
-    def validate_slug(self, value):
-        value = slugify(value or "")[:120]
-        if not value or not SLUG_RE.match(value):
-            raise serializers.ValidationError("Use lowercase letters, numbers and dashes, e.g. gis-analyst-2026.")
-        if value in RESERVED_SLUGS:
-            raise serializers.ValidationError("That address is reserved. Pick another.")
-        clash = JobLink.objects.filter(slug=value)
-        if self.instance:
-            clash = clash.exclude(pk=self.instance.pk)
-        if clash.exists():
-            raise serializers.ValidationError("That link address is already taken.")
-        return value
+    def get_used_by(self, obj):
+        """Jobs posted with this link."""
+        return list(JobPost.objects.filter(apply_link=obj).values("id", "title", "status"))
+
+    def validate_name(self, value):
+        value = " ".join((value or "").split())
+        if not value:
+            raise serializers.ValidationError("Give the link a name, e.g. Entry level.")
+        return value[:255]
 
     def validate_questions(self, value):
         try:
-            return validate_questions(value)
+            return strip_preferences(validate_questions(value))
         except QuestionError as exc:
             raise serializers.ValidationError(str(exc))
-
-    def validate(self, attrs):
-        if self.instance and "job" in attrs and attrs["job"] != self.instance.job:
-            raise serializers.ValidationError({"job": "A link can't be moved to another job."})
-        if self.instance and "kind" in attrs and attrs["kind"] != self.instance.kind:
-            raise serializers.ValidationError({"kind": "A link's type can't be changed."})
-        return attrs
 
 
 class ApplicationSerializer(serializers.ModelSerializer):

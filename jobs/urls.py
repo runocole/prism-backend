@@ -19,6 +19,9 @@ from .views import (
     CvImportStatusView,
     ResendFormView,
     RemindAwaitingView,
+    PostJobView,
+    JobPreferencesView,
+    DepartmentListView,
 )
 
 urlpatterns = [
@@ -26,6 +29,9 @@ urlpatterns = [
     path("<int:pk>/", JobPostDetailView.as_view(), name="job-detail"),
     path("<int:pk>/open/", OpenJobView.as_view(), name="job-open"),
     path("<int:pk>/close/", CloseJobView.as_view(), name="job-close"),
+    path("<int:pk>/post/", PostJobView.as_view(), name="job-post"),
+    path("<int:pk>/preferences/", JobPreferencesView.as_view(), name="job-preferences"),
+    path("departments/", DepartmentListView.as_view(), name="departments"),
     path("<int:pk>/applications/", JobApplicationsView.as_view(), name="job-applications"),
     path("<int:pk>/screen/", ScreenJobView.as_view(), name="job-screen"),
     path("<int:pk>/applications/<int:app_id>/screen-in/", ManualScreenInView.as_view(), name="manual-screen-in"),

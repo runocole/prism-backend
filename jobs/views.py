@@ -36,7 +36,7 @@ from django.core.files.storage import default_storage
 
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -47,7 +47,10 @@ from config.background import run_in_background
 from .blacklist_import import BlacklistFileError, import_blacklist
 from .imports import process_cv_import, send_form_email
 from .models import JobPost, JobLink, Application, Blacklist, CvImport
-from .questions import STANDARD_QUESTIONS, clean_answers, public_questions
+from .questions import (
+    STANDARD_QUESTIONS, QuestionError, clean_answers, public_questions,
+    strip_preferences, validate_preferences,
+)
 from .serializers import (
     JobPostSerializer,
     ApplicationSerializer,
@@ -55,6 +58,7 @@ from .serializers import (
     BlacklistSerializer,
     CvImportSerializer,
     JobLinkSerializer,
+    clean_job_slug,
 )
 from .screening import screen_applications
 
@@ -154,76 +158,126 @@ class JobApplicationsView(APIView):
         return success(ApplicationSerializer(applications, many=True).data)
 
 
+# ── HR: Post a job, preferences, departments ─────────────────────────────────
+
+class PostJobView(APIView):
+    """
+    POST /api/v1/jobs/<id>/post/  {"link": <link id>, "slug": "gis-analyst-2026"}
+    Choose the questions (a Link) and the public address, and open the job.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        job = JobPost.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"success": False, "error": "Job not found."}, status=404)
+        link = JobLink.objects.filter(pk=request.data.get("link"), is_active=True).first()
+        if not link:
+            return Response({"success": False, "error": "Choose a link (set of questions)."}, status=400)
+        try:
+            slug = clean_job_slug(request.data.get("slug") or job.title, job)
+        except serializers.ValidationError as exc:
+            return Response({"success": False, "error": exc.detail[0]}, status=400)
+        job.apply_link = link
+        job.slug = slug
+        job.status = JobPost.Status.OPEN
+        job.save(update_fields=["apply_link", "slug", "status"])
+        return success(JobPostSerializer(job).data)
+
+
+class JobPreferencesView(APIView):
+    """PUT /api/v1/jobs/<id>/preferences/  {"preferences": {...}} — HR's preferred answers."""
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, pk):
+        job = JobPost.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"success": False, "error": "Job not found."}, status=404)
+        try:
+            job.preferences = validate_preferences(request.data.get("preferences") or {})
+        except QuestionError as exc:
+            return Response({"success": False, "error": str(exc)}, status=400)
+        job.save(update_fields=["preferences"])
+        return success(JobPostSerializer(job).data)
+
+
+class DepartmentListView(APIView):
+    """GET /api/v1/jobs/departments/ — departments already used, for suggestions."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        names = (
+            JobPost.objects.exclude(department="")
+            .values_list("department", flat=True).distinct().order_by("department")
+        )
+        return success(sorted(set(names), key=str.lower))
+
+
 # ── Public: Application Form ──────────────────────────────────────────────────
 
 class PublicApplicationView(APIView):
     """
-    Public form behind every link — no login.
-      GET  /api/v1/jobs/apply/<slug>/[?t=<token>]  → job + link + questions
-      POST /api/v1/jobs/apply/<slug>/              → submit
+    The public page for a job — no login.
+      GET  /api/v1/jobs/apply/<job slug>/[?t=<token>]
+      POST /api/v1/jobs/apply/<job slug>/
 
-    Job link (kind=apply): personal details + CV + cover letter + answers.
-    Screening link (kind=screening): imported candidates only, identified by
-    their personal token (t); they just answer the questions.
+    Without a token: apply to the job (details + CV + cover letter + the
+    questions of the job's link). Needs the job to be open.
+    With a token (imported candidates, from their email): only answer the
+    questions of the link they were sent. Works unless the job is closed.
     """
     permission_classes = [AllowAny]
     authentication_classes = []
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     NOT_AVAILABLE = "This form is not available."
+    PERSONAL = "This link is personal. Please use the link from your email."
 
-    def _get_link(self, slug):
-        try:
-            link = JobLink.objects.select_related("job").get(slug=slug, is_active=True)
-        except JobLink.DoesNotExist:
+    def _resolve(self, slug, token):
+        """Return (job, link, invitee) or None."""
+        job = JobPost.objects.select_related("apply_link").filter(slug=slug).first()
+        if not job or job.status == JobPost.Status.CLOSED:
             return None
-        job_status = link.job.status
-        if link.kind == JobLink.Kind.APPLY and job_status != JobPost.Status.OPEN:
+        if token:
+            try:
+                token = uuid.UUID(str(token))
+            except (TypeError, ValueError):
+                return None
+            invitee = Application.objects.select_related("link").filter(form_token=token, job=job).first()
+            if not invitee or not invitee.link:
+                return None
+            return job, invitee.link, invitee
+        if job.status != JobPost.Status.OPEN or not job.apply_link or not job.apply_link.is_active:
             return None
-        if job_status == JobPost.Status.CLOSED:
-            return None
-        return link
-
-    def _get_invitee(self, link, token):
-        try:
-            token = uuid.UUID(str(token))
-        except (TypeError, ValueError):
-            return None
-        return Application.objects.filter(form_token=token, job=link.job).first()
+        return job, job.apply_link, None
 
     def get(self, request, slug):
-        link = self._get_link(slug)
-        if not link:
-            return Response({"success": False, "error": self.NOT_AVAILABLE}, status=404)
-
-        data = {
-            "title": link.job.title,
-            "department": link.job.department,
-            "description": link.job.description,
-            "requirements": link.job.requirements,
+        token = request.query_params.get("t")
+        found = self._resolve(slug, token)
+        if not found:
+            return Response({"success": False, "error": self.PERSONAL if token else self.NOT_AVAILABLE}, status=404)
+        job, link, invitee = found
+        return success({
+            "title": job.title,
+            "department": job.department,
+            "description": job.description,
+            "requirements": job.requirements,
             "company": settings.COMPANY_NAME,
-            "kind": link.kind,
+            "kind": "screening" if invitee else "apply",
             "intro": link.intro,
             "questions": public_questions(link.questions or []),
-            "candidate": None,
-        }
-        if link.kind == JobLink.Kind.SCREENING:
-            invitee = self._get_invitee(link, request.query_params.get("t"))
-            if not invitee:
-                return Response(
-                    {"success": False, "error": "This link is personal. Please use the link from your email."},
-                    status=404,
-                )
-            data["candidate"] = {
+            "candidate": {
                 "first_name": invitee.first_name,
                 "completed": invitee.status != Application.Status.AWAITING_FORM,
-            }
-        return success(data)
+            } if invitee else None,
+        })
 
     def post(self, request, slug):
-        link = self._get_link(slug)
-        if not link:
-            return Response({"success": False, "error": self.NOT_AVAILABLE}, status=404)
+        token = request.data.get("token")
+        found = self._resolve(slug, token)
+        if not found:
+            return Response({"success": False, "error": self.PERSONAL if token else self.NOT_AVAILABLE}, status=404)
+        job, link, invitee = found
 
         raw_answers = request.data.get("screening_answers") or {}
         if isinstance(raw_answers, str):
@@ -237,30 +291,25 @@ class PublicApplicationView(APIView):
 
         now = timezone.now()
 
-        if link.kind == JobLink.Kind.SCREENING:
-            invitee = self._get_invitee(link, request.data.get("token"))
-            if not invitee:
-                return Response({"success": False, "error": "This link is personal. Please use the link from your email."}, status=404)
+        if invitee:
             if invitee.status != Application.Status.AWAITING_FORM:
                 return Response({"success": False, "error": "You have already submitted your answers. Thank you!"}, status=400)
             invitee.screening_answers = answers
             invitee.status = Application.Status.PENDING
             invitee.form_completed_at = now
-            invitee.link = link
-            invitee.save(update_fields=["screening_answers", "status", "form_completed_at", "link"])
+            invitee.save(update_fields=["screening_answers", "status", "form_completed_at"])
             return success({"message": "Answers submitted.", "id": invitee.id}, status.HTTP_201_CREATED)
 
         email = (request.data.get("email") or "").strip()
-        if Application.objects.filter(job=link.job, email__iexact=email).exists():
+        if Application.objects.filter(job=job, email__iexact=email).exists():
             return Response(
                 {"success": False, "error": "You have already applied for this position."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         serializer = PublicApplicationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         application = serializer.save(
-            job=link.job,
+            job=job,
             link=link,
             source=Application.Source.APPLY,
             status=Application.Status.PENDING,
@@ -273,48 +322,46 @@ class PublicApplicationView(APIView):
         )
 
 
-# ── HR: Links (job links / screening links with custom questions) ────────────
+# ── HR: Links (reusable question sets) ───────────────────────────────────────
 
 class JobLinkListCreateView(APIView):
     """
-    GET  /api/v1/jobs/links/[?job=<id>]  — all links
-    POST /api/v1/jobs/links/             — create; creating a Job link for a
-                                            draft job also opens the job ("Post job")
+    GET  /api/v1/jobs/links/            — all links
+    GET  /api/v1/jobs/links/?job=<id>   — links a job uses (its posted link + links sent to its imports)
+    POST /api/v1/jobs/links/            — create {name, intro, questions}
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        links = JobLink.objects.select_related("job")
+        links = JobLink.objects.all()
         job_id = request.query_params.get("job")
         if job_id:
-            links = links.filter(job_id=job_id)
+            job = JobPost.objects.filter(pk=job_id).first()
+            ids = set(Application.objects.filter(job_id=job_id, link__isnull=False).values_list("link_id", flat=True))
+            if job and job.apply_link_id:
+                ids.add(job.apply_link_id)
+            links = links.filter(pk__in=ids)
         return success(JobLinkSerializer(links, many=True).data)
 
     def post(self, request):
         serializer = JobLinkSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         link = serializer.save(created_by=request.user)
-        if link.kind == JobLink.Kind.APPLY and link.job.status == JobPost.Status.DRAFT:
-            link.job.status = JobPost.Status.OPEN
-            link.job.save(update_fields=["status"])
         return success(JobLinkSerializer(link).data, status.HTTP_201_CREATED)
 
 
 class JobLinkDetailView(APIView):
-    """GET / PATCH / DELETE /api/v1/jobs/links/<id>/ — PATCH also saves preferred answers."""
+    """GET / PATCH / DELETE /api/v1/jobs/links/<id>/"""
     permission_classes = [IsAuthenticated]
 
-    def _get(self, pk):
-        return JobLink.objects.select_related("job").filter(pk=pk).first()
-
     def get(self, request, pk):
-        link = self._get(pk)
+        link = JobLink.objects.filter(pk=pk).first()
         if not link:
             return Response({"success": False, "error": "Link not found."}, status=404)
         return success(JobLinkSerializer(link).data)
 
     def patch(self, request, pk):
-        link = self._get(pk)
+        link = JobLink.objects.filter(pk=pk).first()
         if not link:
             return Response({"success": False, "error": "Link not found."}, status=404)
         serializer = JobLinkSerializer(link, data=request.data, partial=True)
@@ -323,13 +370,13 @@ class JobLinkDetailView(APIView):
         return success(serializer.data)
 
     def delete(self, request, pk):
-        link = self._get(pk)
+        link = JobLink.objects.filter(pk=pk).first()
         if not link:
             return Response({"success": False, "error": "Link not found."}, status=404)
-        if link.applications.exists():
+        if link.applications.exists() or JobPost.objects.filter(apply_link=link).exists():
             link.is_active = False
             link.save(update_fields=["is_active"])
-            return success("This link already has responses, so it was switched off instead of deleted.")
+            return success("This link is in use, so it was switched off instead of deleted.")
         link.delete()
         return success("Link deleted.")
 
@@ -339,7 +386,7 @@ class StandardQuestionsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return success(STANDARD_QUESTIONS)
+        return success(strip_preferences(STANDARD_QUESTIONS))
 
 
 # ── HR: Import CVs ───────────────────────────────────────────────────────────
@@ -363,13 +410,11 @@ class ImportCvsView(APIView):
         if job.status == JobPost.Status.CLOSED:
             return Response({"success": False, "error": "This job is closed. Reopen it first."}, status=400)
 
-        link = JobLink.objects.filter(
-            pk=request.data.get("link"), job=job, kind=JobLink.Kind.SCREENING
-        ).first()
+        link = JobLink.objects.filter(pk=request.data.get("link")).first()
         if not link:
-            return Response({"success": False, "error": "Choose a screening link for this job."}, status=400)
+            return Response({"success": False, "error": "Choose which link (questions) to send them."}, status=400)
         if not link.is_active:
-            return Response({"success": False, "error": "That screening link is switched off."}, status=400)
+            return Response({"success": False, "error": "That link is switched off."}, status=400)
 
         files = request.FILES.getlist("files")
         if not files:

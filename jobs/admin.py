@@ -25,9 +25,9 @@ class BlacklistAdmin(admin.ModelAdmin):
 
 @admin.register(JobLink)
 class JobLinkAdmin(admin.ModelAdmin):
-    list_display = ("name", "kind", "slug", "job", "is_active", "created_at")
-    list_filter = ("kind", "is_active")
-    search_fields = ("name", "slug", "job__title")
+    list_display = ("name", "is_active", "created_at")
+    list_filter = ("is_active",)
+    search_fields = ("name",)
 
 
 @admin.register(CvImport)

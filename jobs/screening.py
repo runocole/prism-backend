@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from config import ai
 from .models import Application, Blacklist, JobPost
-from .questions import check_preferred
+from .questions import check_preferred, with_prefs
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,8 @@ def check_answers(application: Application) -> tuple[bool, str]:
     link = application.link
     if not link:
         return True, ""
-    mismatches = check_preferred(link.questions or [], application.screening_answers or {})
+    questions = with_prefs(link.questions or [], application.job.preferences or {})
+    mismatches = check_preferred(questions, application.screening_answers or {})
     if mismatches:
         return False, f"Answer mismatch on: {'; '.join(mismatches)}"
     return True, "All answers match preferred criteria."

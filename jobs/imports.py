@@ -90,7 +90,7 @@ def extract_contact(data: bytes, filename: str) -> dict:
 
 
 def form_url(application: Application) -> str:
-    return f"{application.link.url}?t={application.form_token}"
+    return f"{settings.FRONTEND_URL}/apply/{application.job.slug}?t={application.form_token}"
 
 
 def send_form_email(application: Application) -> bool:

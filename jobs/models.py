@@ -43,8 +43,17 @@ class JobPost(models.Model):
         max_length=10, choices=CvAiMode.choices, default=CvAiMode.OFF
     )
 
-    # Unique slug used in the public application URL
+    # Public URL: FRONTEND_URL/apply/<slug> — HR chooses it when posting the job
     slug = models.SlugField(max_length=255, unique=True, blank=True)
+
+    # Questions applicants answer on the job's public page (set by "Post job")
+    apply_link = models.ForeignKey(
+        "JobLink", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+
+    # HR's preferred answers for screening, per question id:
+    #   {"<question id>": {"preferred": ["Yes"], "min": null, "max": 300000}}
+    preferences = models.JSONField(default=dict, blank=True)
 
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT
@@ -75,11 +84,9 @@ class JobPost(models.Model):
 
 class JobLink(models.Model):
     """
-    A public form for a job, at FRONTEND_URL/apply/<slug>, with its own questions.
-
-      apply     — "Job link": anyone can apply (personal info + CV + questions)
-      screening — "Screening link": sent to imported candidates, each with a
-                  personal token; they only answer the questions.
+    A "Link": a reusable, named set of screening questions (e.g. "Entry level",
+    "Experienced"). Not tied to a job — a job uses one when it's posted
+    (JobPost.apply_link), and imported candidates are sent one (Application.link).
 
     questions is a list of:
       {
@@ -88,20 +95,12 @@ class JobLink(models.Model):
         "type": "choice" | "yes_no" | "number" | "text",
         "options": ["...", ...],                # choice only
         "required": true,
-        "show_if": {"question": "<id>", "op": "is" | "is_not", "value": "..."} | null,
-        "preferred": ["..."],                   # choice / yes_no — set at screening
-        "min": null, "max": null                # number — set at screening
+        "show_if": {"question": "<id>", "op": "is" | "is_not", "value": "..."} | null
       }
+    Preferred answers are NOT stored here — they're per job (JobPost.preferences).
     """
 
-    class Kind(models.TextChoices):
-        APPLY = "apply", "Job link"
-        SCREENING = "screening", "Screening link"
-
-    job = models.ForeignKey(JobPost, on_delete=models.CASCADE, related_name="links")
-    kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.APPLY)
-    name = models.CharField(max_length=255, help_text="Internal label, e.g. 'LinkedIn imports'")
-    slug = models.SlugField(max_length=120, unique=True)
+    name = models.CharField(max_length=255, help_text="e.g. 'Entry level' or 'Experienced'")
     intro = models.TextField(blank=True, help_text="Message shown at the top of the form")
     questions = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
@@ -116,11 +115,7 @@ class JobLink(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.name} ({self.kind}) → {self.job.title}"
-
-    @property
-    def url(self):
-        return f"{settings.FRONTEND_URL}/apply/{self.slug}"
+        return self.name
 
 
 class CvImport(models.Model):

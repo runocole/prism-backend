@@ -131,7 +131,7 @@ def validate_questions(questions) -> list:
         q = {
             "id": qid, "text": text, "type": qtype, "options": options,
             "required": bool(raw.get("required", True)),
-            "show_if": None, "preferred": [], "min": None, "max": None,
+            "show_if": None,
         }
 
         show_if = raw.get("show_if")
@@ -143,13 +143,6 @@ def validate_questions(questions) -> list:
                 "op": "is_not" if show_if.get("op") == "is_not" else "is",
                 "value": str(show_if.get("value") or ""),
             }
-
-        if qtype in ("choice", "yes_no"):
-            allowed = options_of(q)
-            q["preferred"] = [p for p in raw.get("preferred") or [] if p in allowed]
-        elif qtype == "number":
-            q["min"] = _to_number(raw.get("min"))
-            q["max"] = _to_number(raw.get("max"))
 
         cleaned.append(q)
     return cleaned
@@ -223,3 +216,40 @@ def check_preferred(questions: list, answers: dict) -> list:
             elif q.get("max") is not None and number > q["max"]:
                 mismatches.append(f'{q["text"]} (above {q["max"]:,.0f})')
     return mismatches
+
+
+# ── Preferred answers (stored per job: JobPost.preferences) ───────────────────
+
+def strip_preferences(questions: list) -> list:
+    """Links hold questions only — preferred answers live on the job."""
+    return [{k: v for k, v in q.items() if k not in ("preferred", "min", "max")} for q in questions]
+
+
+def validate_preferences(prefs) -> dict:
+    """{"<question id>": {"preferred": [...], "min": n|null, "max": n|null}} — drop empty entries."""
+    if not isinstance(prefs, dict):
+        raise QuestionError("Preferences must be an object keyed by question id.")
+    clean = {}
+    for qid, entry in prefs.items():
+        if not isinstance(entry, dict) or not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", str(qid)):
+            continue
+        preferred = [str(p) for p in entry.get("preferred") or [] if str(p).strip()]
+        lo, hi = _to_number(entry.get("min")), _to_number(entry.get("max"))
+        if preferred or lo is not None or hi is not None:
+            clean[str(qid)] = {"preferred": preferred, "min": lo, "max": hi}
+    return clean
+
+
+def with_prefs(questions: list, prefs: dict) -> list:
+    """Questions with the job's preferred answers filled in (for screening)."""
+    prefs = prefs or {}
+    out = []
+    for q in questions:
+        p = prefs.get(q["id"]) or {}
+        allowed = options_of(q)
+        out.append(q | {
+            "preferred": [v for v in p.get("preferred") or [] if v in allowed],
+            "min": p.get("min"),
+            "max": p.get("max"),
+        })
+    return out
