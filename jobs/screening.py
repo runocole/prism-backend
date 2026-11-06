@@ -64,15 +64,29 @@ def check_blacklist(application: Application) -> bool:
     return False
 
 
-# ── Step 2: CV strength check via Groq ───────────────────────────────────────
+# ── Step 2: CV strength check via Claude ─────────────────────────────────────
 
 CV_SCHEMA = {
     "type": "object",
     "properties": {
         "score": {"type": "integer"},
         "summary": {"type": "string"},
+        "relevant_experience_years": {"type": "integer"},
+        "requirements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "requirement": {"type": "string"},
+                    "status": {"type": "string", "enum": ["met", "partial", "missing"]},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["requirement", "status", "evidence"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["score", "summary"],
+    "required": ["score", "summary", "relevant_experience_years", "requirements"],
     "additionalProperties": False,
 }
 
@@ -88,32 +102,52 @@ Description:
 Requirements:
 {job.requirements or "(none given)"}
 
-Give "score" as a whole number from 0 to 100:
+"requirements": list each distinct requirement from the Requirements above (at most 10, in the order given, each in a few words). If no requirements are given, use the 3-6 most important ones implied by the description. For each:
+- "status": "met", "partial" (some but not all, or only indirectly), or "missing" (nothing in the CV shows it)
+- "evidence": a short phrase from what the CV says, e.g. "4 years as GIS analyst at X" or "not mentioned"
+
+"relevant_experience_years": whole years of work experience relevant to this role (0 if none or unclear).
+
+"score": a whole number from 0 to 100:
 - 0-39: clearly unqualified for this role, or the document is not a real CV
 - 40-59: partly relevant, with significant gaps
 - 60-79: a good fit
 - 80-100: a strong fit
 
-Judge only skills, qualifications and experience relevant to the role. Ignore name, age, gender, religion, ethnicity, marital status and photos.
+"summary": 1-2 plain sentences for HR with the main strength and the main gap.
 
-Give "summary" as 2-3 plain sentences for HR: the main strengths and the main gaps against the requirements."""
+Judge only skills, qualifications and experience relevant to the role. Ignore name, age, gender, religion, ethnicity, marital status and photos. Do not guess: if the CV doesn't show something, mark it missing."""
 
 
-def check_cv_strength(application: Application) -> tuple[bool, str, float | None]:
+def _clean_cv_details(result: dict) -> dict:
+    reqs = []
+    for r in result.get("requirements") or []:
+        text = (r.get("requirement") or "").strip()
+        if text:
+            status = r.get("status") if r.get("status") in ("met", "partial", "missing") else "missing"
+            reqs.append({"requirement": text, "status": status, "evidence": (r.get("evidence") or "").strip()})
+    return {
+        "requirements": reqs[:10],
+        "relevant_experience_years": max(0, int(result.get("relevant_experience_years") or 0)),
+    }
+
+
+def check_cv_strength(application: Application) -> tuple[bool, str, float | None, dict]:
     """
     Claude reads the CV and scores it against the job.
-    Returns (passes, summary, score).
+    Returns (passes, summary, score, details) — details holds the
+    requirement checklist and years of relevant experience.
 
     If the AI can't run (no key, unreadable file, API down) the candidate
     passes this step with a note, so nobody is rejected because of a
     technical problem — HR sees the note and can check the CV by hand.
     """
     if not ai.is_configured():
-        return True, "CV not AI-reviewed (ANTHROPIC_API_KEY not set).", None
+        return True, "CV not AI-reviewed (ANTHROPIC_API_KEY not set).", None, {}
 
     cv = application.cv
     if not cv or not ai.is_supported(cv.name):
-        return True, "CV not AI-reviewed (file type not supported) — check manually.", None
+        return True, "CV not AI-reviewed (file type not supported) — check manually.", None, {}
 
     try:
         with cv.open("rb") as f:
@@ -122,16 +156,17 @@ def check_cv_strength(application: Application) -> tuple[bool, str, float | None
             data, cv.name, _cv_instructions(application.job), CV_SCHEMA, effort="medium"
         )
     except ai.DocumentError as exc:
-        return True, f"CV not AI-reviewed ({exc}) — check manually.", None
+        return True, f"CV not AI-reviewed ({exc}) — check manually.", None, {}
     except (anthropic.APIError, OSError):
         logger.exception("CV check failed for application %s", application.id)
-        return True, "CV AI check failed (service error) — check manually.", None
+        return True, "CV AI check failed (service error) — check manually.", None, {}
 
     score = max(0, min(100, int(result.get("score", 0))))
     summary = (result.get("summary") or "").strip()
     passes = score >= settings.CV_PASS_SCORE
     verdict = "passes" if passes else f"below the pass mark of {settings.CV_PASS_SCORE}"
-    return passes, f"CV {score}/100 ({verdict}): {summary}", float(score)
+    return passes, f"CV {score}/100 ({verdict}): {summary}", float(score), _clean_cv_details(result)
+
 
 # ── Step 3: MCQ answers check ─────────────────────────────────────────────────
 
@@ -201,9 +236,10 @@ def run_screening(application: Application) -> dict:
         return result
 
     # 2. CV strength check
-    cv_passes, cv_summary, cv_score = check_cv_strength(application)
+    cv_passes, cv_summary, cv_score, cv_details = check_cv_strength(application)
     result["cv_passes"] = cv_passes
     application.ai_score = cv_score
+    application.ai_details = cv_details
 
     # 3. MCQ answers check
     mcq_passes, mcq_summary = check_mcq_answers(application)
@@ -221,7 +257,7 @@ def run_screening(application: Application) -> dict:
 
     application.ai_summary = full_summary
     application.ai_screened_at = timezone.now()
-    application.save(update_fields=["status", "ai_score", "ai_summary", "ai_screened_at"])
+    application.save(update_fields=["status", "ai_score", "ai_details", "ai_summary", "ai_screened_at"])
 
     result["summary"] = full_summary
     return result

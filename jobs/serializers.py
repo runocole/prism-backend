@@ -34,11 +34,11 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "id", "job", "job_title", "department",
             "first_name", "last_name", "email", "phone", "phone2", "dob",
             "cv", "cover_letter", "linkedin", "twitter", "github",
-            "other_social", "screening_answers", "status", "ai_score",
+            "other_social", "screening_answers", "status", "ai_score", "ai_details",
             "ai_summary", "ai_screened_at", "submitted_at",
         )
         read_only_fields = (
-            "status", "ai_score", "ai_summary", "ai_screened_at", "submitted_at",
+            "status", "ai_score", "ai_details", "ai_summary", "ai_screened_at", "submitted_at",
         )
 
 class PublicApplicationSerializer(serializers.ModelSerializer):

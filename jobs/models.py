@@ -127,6 +127,8 @@ class Application(models.Model):
     ai_score = models.FloatField(null=True, blank=True)
     ai_summary = models.TextField(blank=True)
     ai_screened_at = models.DateTimeField(null=True, blank=True)
+    # Requirement checklist + years of relevant experience from the CV check
+    ai_details = models.JSONField(default=dict, blank=True)
     # When background screening picked this up — used to retry stuck jobs
     screening_started_at = models.DateTimeField(null=True, blank=True)
 
