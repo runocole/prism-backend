@@ -283,6 +283,9 @@ class SessionListView(APIView):
                 "started_at": s.started_at,
                 "submitted_at": s.submitted_at,
                 "violation_count": s.violations.count(),
+                "decision": s.decision,
+                "score_pct": s.score_pct,
+                "reviewed_at": s.reviewed_at,
             }
             for s in sessions
         ]
@@ -390,6 +393,12 @@ class SubmitResultView(APIView):
                 status=400,
             )
 
+        if session.status == Session.Status.IN_PROGRESS:
+            return Response(
+                {"success": False, "error": "The candidate hasn't submitted this test yet."},
+                status=400,
+            )
+
         # Calculate total score percentage
         total_points = session.invite.test.total_points
         earned = sum(
@@ -398,17 +407,23 @@ class SubmitResultView(APIView):
         )
         score_pct = round((earned / total_points * 100), 1) if total_points else 0
 
-        # Save the decision
+        # Save the decision (re-submitting overwrites the previous one)
         session.status = Session.Status.REVIEWED
-        session.save(update_fields=["status"])
-
+        session.decision = decision
+        session.decision_notes = request.data.get("notes", "") or ""
+        session.score_pct = score_pct
+        session.reviewed_by = request.user
+        session.reviewed_at = timezone.now()
+        session.save(update_fields=[
+            "status", "decision", "decision_notes", "score_pct", "reviewed_by", "reviewed_at",
+        ])
 
         return success({
-            "decision": decision,
+            "decision": session.decision,
             "score_pct": score_pct,
             "earned_points": earned,
             "total_points": total_points,
-            "notes": request.data.get("notes", ""),
+            "notes": session.decision_notes,
             "reviewed_by": request.user.email,
-            "reviewed_at": timezone.now().isoformat(),
+            "reviewed_at": session.reviewed_at.isoformat(),
         })

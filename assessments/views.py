@@ -15,6 +15,10 @@ Questions:
   POST   /api/v1/assessments/<id>/questions/           — add a question
   PATCH  /api/v1/assessments/<id>/questions/<q_id>/    — edit a question
   DELETE /api/v1/assessments/<id>/questions/<q_id>/    — remove a question
+
+Question import (PDF / Word, read by Claude in the background):
+  POST   /api/v1/assessments/parse-pdf/              — upload, returns import_id
+  GET    /api/v1/assessments/parse-pdf/<import_id>/  — poll status + questions
 """
 
 from rest_framework import status
@@ -23,8 +27,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser
 
-from .models import Test, Question
+from config import ai
+from config.background import run_in_background
+
+from .models import Test, Question, QuestionImport
 from .serializers import TestSerializer, TestListSerializer, QuestionSerializer
+from .tasks import process_question_import
 
 
 def success(data, code=status.HTTP_200_OK):
@@ -168,11 +176,33 @@ class QuestionDetailView(APIView):
         return success(serializer.data)
 
     def delete(self, request, pk, q_pk):
-        question
+        question = self._get_question(pk, q_pk, request.user)
+        if not question:
+            return Response(
+                {"success": False, "error": "Question not found."}, status=404
+            )
+        test = question.test
+        question.delete()
 
-class ParsePdfView(APIView):
+        # Close the gap so order_index stays 0, 1, 2, ...
+        for index, q in enumerate(test.questions.order_by("order_index", "id")):
+            if q.order_index != index:
+                q.order_index = index
+                q.save(update_fields=["order_index"])
+
+        return success("Question deleted.")
+
+
+class ParseDocumentView(APIView):
+    """
+    POST /api/v1/assessments/parse-pdf/
+    Upload a test paper (PDF or Word .docx). Claude extracts the questions in
+    the background; poll ParseDocumentStatusView with the returned import_id.
+    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
+
+    MAX_BYTES = 20 * 1024 * 1024
 
     def post(self, request):
         file = request.FILES.get("file")
@@ -181,92 +211,44 @@ class ParsePdfView(APIView):
                 {"success": False, "error": "No file uploaded."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(file)
-            text = "\n".join(
-                page.extract_text() or "" for page in reader.pages
-            )
-        except Exception:
+        if not ai.is_supported(file.name):
             return Response(
-                {"success": False, "error": "Could not read PDF."},
+                {"success": False, "error": "Upload a PDF or Word (.docx) file."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        questions = self._parse_questions(text)
-
-        if not questions:
+        if file.size > self.MAX_BYTES:
             return Response(
-                {"success": False, "error": "No questions found in PDF."},
+                {"success": False, "error": "File is too large (max 20 MB)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if not ai.is_configured():
+            return Response(
+                {"success": False, "error": "Question import isn't set up yet: ANTHROPIC_API_KEY is missing on the server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
-        return Response({"success": True, "data": questions})
+        job = QuestionImport.objects.create(created_by=request.user, filename=file.name)
+        run_in_background(process_question_import, job.id, file.read(), file.name)
 
-    def _parse_questions(self, text: str) -> list:
-        import urllib.request
-        import json
-        import re
-
-        prompt = (
-            "You are a test paper parser. Extract all exam questions from the text below.\n\n"
-            "Rules:\n"
-            "- SKIP all header text, company name, address, instructions, and name/date/phone input fields\n"
-            "- For each numbered question, determine if it is mcq (has lettered options a/b/c/d) or short_answer\n"
-            "- For MCQ: extract the full question as prompt, all options (without the A/B/C prefix), correct_index (0-based, default 0 if not stated)\n"
-            "- For short_answer: extract the full question text as prompt\n"
-            "- Split multi-part questions like 5a) 5b) into separate questions, each with its full text\n"
-            "- Only add [See diagram] to the prompt if the question explicitly says to refer to a diagram, figure or example table shown above\n"
-            "- Always set points to 5\n"
-            "- Return ONLY a valid JSON array, no markdown fences, no explanation\n\n"
-            "Format:\n"
-            "[\n"
-            "  {\"type\": \"mcq\", \"prompt\": \"...\", \"options\": [\"...\"], \"correct_index\": 0, \"points\": 5},\n"
-            "  {\"type\": \"short_answer\", \"prompt\": \"...\", \"points\": 5}\n"
-            "]\n\n"
-            "Text:\n" + text
+        return success(
+            {"import_id": str(job.id), "status": job.status},
+            status.HTTP_202_ACCEPTED,
         )
 
-        payload = json.dumps({
-            "model": "llama-3.1-8b-instant",
-            "max_tokens": 4096,
-            "messages": [{"role": "user", "content": prompt}]
-        }).encode()
 
-        from django.conf import settings
-        api_key = getattr(settings, "GROK_API_KEY", "")
+class ParseDocumentStatusView(APIView):
+    """GET /api/v1/assessments/parse-pdf/<import_id>/ — poll an upload's progress."""
+    permission_classes = [IsAuthenticated]
 
-        req = urllib.request.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
-        )
-
+    def get(self, request, import_id):
         try:
-            import subprocess
-            curl_result = subprocess.run([
-                "curl", "-s", "-X", "POST",
-                "https://api.groq.com/openai/v1/chat/completions",
-                "-H", "Content-Type: application/json",
-                "-H", f"Authorization: Bearer {api_key}",
-                "-d", payload.decode()
-            ], capture_output=True, text=True, timeout=60)
-            result = json.loads(curl_result.stdout)
-            raw = result["choices"][0]["message"]["content"].strip()
-            raw = re.sub(r"^```json|^```|```$", "", raw, flags=re.MULTILINE).strip()
-            parsed = json.loads(raw)
-            # Normalize question_type -> type
-            for q in parsed:
-                if "question_type" in q and "type" not in q:
-                    q["type"] = q.pop("question_type")
-                if "correct_index" not in q:
-                    q["correct_index"] = 0
-            return parsed
-        except Exception as e:
-            return []
+            job = QuestionImport.objects.get(pk=import_id, created_by=request.user)
+        except QuestionImport.DoesNotExist:
+            return Response({"success": False, "error": "Import not found."}, status=404)
 
+        return success({
+            "import_id": str(job.id),
+            "status": job.status,
+            "questions": job.questions,
+            "error": job.error,
+        })

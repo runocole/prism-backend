@@ -8,12 +8,12 @@ Built with Django 6, Django REST Framework, and SQLite.
 
 - **Job postings** — create jobs with unique application slugs
 - **Public applications** — candidates submit CV, cover letter, screening answers
-- **AI screening pipeline** — blacklist check, CV strength (Groq/Llama), MCQ filtering
+- **Screening pipeline** — blacklist check, CV strength (Claude reads the PDF/Word CV and scores it 0-100), preferred-answer filtering; runs in the background
 - **Blacklist management** — phone-based matching with fuzzy name fallback
-- **Test builder** — MCQ and short-answer questions, PDF parser
+- **Test builder** — MCQ and short-answer questions, import questions from a PDF or Word test paper (Claude)
 - **Invite system** — UUID tokens, expiry, batch invites
 - **Proctored sessions** — webcam recordings, violation tracking, timer sync
-- **Results** — answer scoring, manual review, pass/fail
+- **Results** — answer scoring, manual review, saved pass/fail/hold decision
 
 ## Stack
 
@@ -21,7 +21,7 @@ Built with Django 6, Django REST Framework, and SQLite.
 - SimpleJWT authentication
 - SQLite (dev) / PostgreSQL (prod)
 - Gunicorn + Nginx
-- Groq API (Llama 3.3 70B) for CV screening
+- Anthropic API (Claude) for CV screening and question import
 
 ## Setup
 
@@ -42,7 +42,10 @@ python manage.py runserver
 | `DEBUG` | True/False |
 | `ALLOWED_HOSTS` | Comma-separated hosts |
 | `CORS_ALLOWED_ORIGINS` | Frontend URL |
-| `GROK_API_KEY` | Groq API key for CV screening |
+| `ANTHROPIC_API_KEY` | Anthropic API key — CV screening and question import |
+| `CV_PASS_SCORE` | Minimum AI CV score (0-100) to screen in, default 50 |
+| `FRONTEND_URL` | Used in invite links, default https://screening.oticgs.com |
+| `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` | SMTP login for invite emails |
 | `INVITE_EXPIRY_HOURS` | Hours before invite expires |
 
 ## Production

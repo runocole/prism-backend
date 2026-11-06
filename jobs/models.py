@@ -127,6 +127,8 @@ class Application(models.Model):
     ai_score = models.FloatField(null=True, blank=True)
     ai_summary = models.TextField(blank=True)
     ai_screened_at = models.DateTimeField(null=True, blank=True)
+    # When background screening picked this up — used to retry stuck jobs
+    screening_started_at = models.DateTimeField(null=True, blank=True)
 
     submitted_at = models.DateTimeField(auto_now_add=True)
 

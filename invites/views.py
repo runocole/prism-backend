@@ -25,6 +25,8 @@ from rest_framework.views import APIView
 
 from assessments.models import Test
 from .models import Invite
+from .emails import send_invite_emails
+from config.background import run_in_background
 from .serializers import (
     InviteSerializer,
     SingleInviteCreateSerializer,
@@ -91,7 +93,7 @@ class InviteListCreateView(APIView):
             created_by=request.user,
         )
 
-        # TODO: send_invite_email.delay(invite.id) — enable when Redis is running
+        run_in_background(send_invite_emails, [invite.id])
 
         return success(
             InviteSerializer(invite, context={"request": request}).data,
@@ -142,7 +144,8 @@ class BatchInviteCreateView(APIView):
                 **create_kwargs,
             )
             created_invites.append(invite)
-            # TODO: send_invite_email.delay(invite.id) — enable when Redis is running
+
+        run_in_background(send_invite_emails, [i.id for i in created_invites])
 
         return success(
             {

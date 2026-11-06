@@ -39,6 +39,7 @@ class SessionSerializer(serializers.ModelSerializer):
     candidate_name = serializers.CharField(source="invite.candidate_name", read_only=True)
     candidate_email = serializers.CharField(source="invite.candidate_email", read_only=True)
     test_title = serializers.CharField(source="invite.test.title", read_only=True)
+    reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True, default=None)
 
     class Meta:
         model = Session
@@ -46,6 +47,7 @@ class SessionSerializer(serializers.ModelSerializer):
             "id", "candidate_name", "candidate_email", "test_title",
             "status", "started_at", "submitted_at", "remaining_seconds",
             "recording_path", "violation_count", "answers", "violations",
+            "decision", "decision_notes", "score_pct", "reviewed_by_email", "reviewed_at",
         )
 
 

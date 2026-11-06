@@ -11,6 +11,8 @@ Question payload (JSONField) differs by type:
   Short answer: { "word_limit": 300 }
 """
 
+import uuid
+
 from django.db import models
 from django.conf import settings
 
@@ -86,3 +88,35 @@ class Question(models.Model):
 
     def __str__(self):
         return f"Q{self.order_index + 1} [{self.type}] — {self.test.title}"
+
+class QuestionImport(models.Model):
+    """
+    One "Upload questions" job: HR uploads a PDF/Word test paper, Claude
+    extracts the questions in the background, the frontend polls for the result.
+    """
+
+    class Status(models.TextChoices):
+        PROCESSING = "processing", "Processing"
+        DONE = "done", "Done"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="question_imports",
+    )
+    filename = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PROCESSING
+    )
+    questions = models.JSONField(default=list, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "question_imports"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.filename} [{self.status}]"

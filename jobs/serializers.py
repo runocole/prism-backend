@@ -52,15 +52,21 @@ class PublicApplicationSerializer(serializers.ModelSerializer):
             "screening_answers",
         )
 
-    def validate_cv(self, value):
-        if not value.name.endswith(".pdf"):
-            raise serializers.ValidationError("CV must be a PDF file.")
+    ALLOWED_EXTENSIONS = (".pdf", ".docx")
+    MAX_BYTES = 10 * 1024 * 1024
+
+    def _validate_document(self, value, label):
+        if not value.name.lower().endswith(self.ALLOWED_EXTENSIONS):
+            raise serializers.ValidationError(f"{label} must be a PDF or Word (.docx) file.")
+        if value.size > self.MAX_BYTES:
+            raise serializers.ValidationError(f"{label} must be 10 MB or smaller.")
         return value
 
+    def validate_cv(self, value):
+        return self._validate_document(value, "CV")
+
     def validate_cover_letter(self, value):
-        if not value.name.endswith(".pdf"):
-            raise serializers.ValidationError("Cover letter must be a PDF file.")
-        return value
+        return self._validate_document(value, "Cover letter")
 
 
 class BlacklistSerializer(serializers.ModelSerializer):

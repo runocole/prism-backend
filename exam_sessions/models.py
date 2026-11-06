@@ -11,6 +11,7 @@ Session tracks the server-authoritative timer so the client
 cannot cheat by manipulating the browser countdown.
 """
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -38,6 +39,24 @@ class Session(models.Model):
 
     # Object storage path to the assembled recording file
     recording_path = models.CharField(max_length=500, blank=True)
+
+    # Reviewer's final decision (set by SubmitResultView)
+    class Decision(models.TextChoices):
+        PASS = "pass", "Pass"
+        FAIL = "fail", "Fail"
+        HOLD = "hold", "Hold"
+
+    decision = models.CharField(max_length=10, choices=Decision.choices, blank=True)
+    decision_notes = models.TextField(blank=True)
+    score_pct = models.FloatField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sessions_reviewed",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "sessions"

@@ -60,6 +60,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        # Background jobs write at the same time as web requests —
+        # wait up to 20s for a lock instead of failing with "database is locked".
+        "OPTIONS": {"timeout": 20},
     }
 }
 
@@ -116,7 +119,18 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 
 INVITE_EXPIRY_HOURS = int(os.environ.get("INVITE_EXPIRY_HOURS", 72))
-GROK_API_KEY = os.environ.get("GROK_API_KEY", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://screening.oticgs.com")
+
+# ── Anthropic (Claude) — reads CVs and test papers (PDF / Word .docx) ────────
+# >>> PUT YOUR KEY IN THE SERVER'S .env FILE, NOT HERE: <<<
+#       ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxxxxx
+# Get one at https://console.anthropic.com → API Keys.
+# Without it: CV screening skips the AI check (candidates aren't rejected for
+# it) and "Upload questions" on the test builder shows a "not set up" error.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Minimum AI CV score (0–100) to be screened in.
+CV_PASS_SCORE = int(os.environ.get("CV_PASS_SCORE", 50))
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"

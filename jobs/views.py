@@ -17,11 +17,17 @@ Blacklist:
   DELETE     /api/v1/jobs/blacklist/<id>/         — remove from blacklist
 """
 
+from datetime import timedelta
+
+from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
+
+from config.background import run_in_background
 
 from .models import JobPost, Application, Blacklist
 from .serializers import (
@@ -30,7 +36,11 @@ from .serializers import (
     PublicApplicationSerializer,
     BlacklistSerializer,
 )
-from .screening import run_screening
+from .screening import screen_applications
+
+# A "screening" application older than this is assumed stuck (e.g. the
+# server restarted mid-run) and is picked up again by the next run.
+SCREENING_STALE_AFTER = timedelta(minutes=15)
 
 
 def success(data, code=status.HTTP_200_OK):
@@ -208,7 +218,9 @@ class BlacklistDetailView(APIView):
 class ScreenJobView(APIView):
     """
     HR triggers screening for all pending applications on a job.
-    Runs blacklist → CV → MCQ pipeline on each.
+    Marks them "screening" and runs blacklist → CV (Claude) → MCQ in a
+    background thread, so this returns immediately. The frontend polls
+    /applications/ until nothing is "screening".
     """
     permission_classes = [IsAuthenticated]
 
@@ -218,32 +230,27 @@ class ScreenJobView(APIView):
         except JobPost.DoesNotExist:
             return Response({"success": False, "error": "Job not found."}, status=404)
 
-        # Only screen pending applications
-        pending = job.applications.filter(status=Application.Status.PENDING)
+        now = timezone.now()
+        stale_before = now - SCREENING_STALE_AFTER
+        to_screen = job.applications.filter(
+            Q(status=Application.Status.PENDING)
+            | Q(status=Application.Status.SCREENING, screening_started_at__lt=stale_before)
+            | Q(status=Application.Status.SCREENING, screening_started_at__isnull=True)
+        )
+        ids = list(to_screen.values_list("id", flat=True))
 
-        if not pending.exists():
+        if not ids:
             return Response(
                 {"success": False, "error": "No pending applications to screen."},
                 status=400,
             )
 
-        results = {
-            "screened_in": 0,
-            "screened_out": 0,
-            "blacklisted": 0,
-            "total": pending.count(),
-        }
+        Application.objects.filter(id__in=ids).update(
+            status=Application.Status.SCREENING, screening_started_at=now
+        )
+        run_in_background(screen_applications, ids)
 
-        for application in pending:
-            result = run_screening(application)
-            if result["blacklisted"]:
-                results["blacklisted"] += 1
-            elif application.status == Application.Status.SCREENED_IN:
-                results["screened_in"] += 1
-            else:
-                results["screened_out"] += 1
-
-        return success(results)
+        return success({"queued": len(ids), "application_ids": ids}, status.HTTP_202_ACCEPTED)
 
 
 class ManualScreenInView(APIView):
@@ -270,7 +277,9 @@ class ManualScreenInView(APIView):
 class BatchEmailView(APIView):
     """
     HR sends a unique exam invite to all screened-in candidates for a job.
-    Accepts test_id, creates a unique Invite per candidate, emails each their link.
+    Invites are created (and candidates marked "invited") straight away;
+    the emails go out in a background thread. If an email fails, that
+    candidate goes back to "screened in" so HR can send again.
     """
     permission_classes = [IsAuthenticated]
 
@@ -289,69 +298,60 @@ class BatchEmailView(APIView):
 
         from assessments.models import Test
         from invites.models import Invite
-        from django.core.mail import send_mail
-        from django.conf import settings
-        from datetime import timedelta
-        from django.utils import timezone
 
         try:
-            test = Test.objects.get(pk=test_id)
+            test = Test.objects.get(
+                pk=test_id, created_by=request.user, status=Test.Status.PUBLISHED
+            )
         except Test.DoesNotExist:
-            return Response({"success": False, "error": "Test not found."}, status=404)
+            return Response({"success": False, "error": "Published test not found."}, status=404)
 
-        screened_in = job.applications.filter(status=Application.Status.SCREENED_IN)
-
-        if not screened_in.exists():
+        screened_in = list(job.applications.filter(status=Application.Status.SCREENED_IN))
+        if not screened_in:
             return Response(
                 {"success": False, "error": "No screened-in candidates to email."},
                 status=400,
             )
 
-        frontend_url = getattr(settings, "FRONTEND_URL", "https://screening.oticgs.com")
-        duration_mins = test.duration_mins
-        sent = 0
-
+        expires_at = timezone.now() + timedelta(hours=48)
+        pairs = []
         for app in screened_in:
-            try:
-                # Create a unique invite for this candidate
-                invite = Invite.objects.create(
-                    test=test,
-                    candidate_name=f"{app.first_name} {app.last_name}".strip(),
-                    candidate_email=app.email,
-                    created_by=request.user,
-                    expires_at=timezone.now() + timedelta(hours=48),
-                )
-                exam_link = f"{frontend_url}/c/{invite.token}"
+            invite = Invite.objects.create(
+                test=test,
+                candidate_name=f"{app.first_name} {app.last_name}".strip(),
+                candidate_email=app.email,
+                created_by=request.user,
+                expires_at=expires_at,
+            )
+            pairs.append((invite.id, app.id))
 
-                send_mail(
-                    subject=f"APPLICATION ASSESSMENT — {job.title}",
-                    message=(
-                        f"Dear {app.first_name},\n\n"
-                        f"You have been invited to take an assessment for the "
-                        f"{job.title} position at OTIC Geosystems.\n\n"
-                        f"Please complete your assessment using the link below:\n"
-                        f"{exam_link}\n\n"
-                        f"IMPORTANT DETAILS:\n"
-                        f"- This link is unique to you. Do not share it.\n"
-                        f"- The assessment must be completed within 48 hours of receiving this email.\n"
-                        f"- The assessment duration is {duration_mins} minutes once started.\n"
-                        f"- Ensure you are in a quiet environment with a stable internet connection.\n"
-                        f"- Your webcam will be required throughout the assessment.\n\n"
-                        f"If you have any issues, reply to this email.\n\n"
-                        f"Best regards,\nOTIC Recruitment Team\nadmin@oticgs.com"
-                    ),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[app.email],
-                    fail_silently=False,
-                )
-                app.status = Application.Status.INVITED
-                app.save(update_fields=["status"])
-                sent += 1
-            except Exception as e:
-                print(f"Failed to send invite to {app.email}: {e}")
-                pass
+        Application.objects.filter(id__in=[a.id for a in screened_in]).update(
+            status=Application.Status.INVITED
+        )
+        run_in_background(send_job_invite_emails, pairs, job.title)
 
-        return success({"sent": sent, "total": screened_in.count()})
+        return success(
+            {"queued": len(pairs), "total": len(pairs)},
+            status.HTTP_202_ACCEPTED,
+        )
+
+
+def send_job_invite_emails(pairs: list[tuple[int, int]], job_title: str):
+    """Background job for BatchEmailView."""
+    from invites.emails import send_invite_email
+    from invites.models import Invite
+
+    for invite_id, app_id in pairs:
+        try:
+            invite = Invite.objects.select_related("test").get(pk=invite_id)
+        except Invite.DoesNotExist:
+            continue
+        if not send_invite_email(invite, job_title):
+            invite.status = Invite.Status.EXPIRED
+            invite.save(update_fields=["status"])
+            Application.objects.filter(pk=app_id).update(
+                status=Application.Status.SCREENED_IN
+            )
 
 
 class UpdatePreferredAnswersView(APIView):
