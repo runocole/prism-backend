@@ -76,12 +76,16 @@ class TestDetailView(APIView):
             return Response(
                 {"success": False, "error": "Test not found."}, status=404
             )
+        data = request.data
         if test.status != Test.Status.DRAFT:
-            return Response(
-                {"success": False, "error": "Only draft tests can be edited."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        serializer = TestSerializer(test, data=request.data, partial=True)
+            # Published tests: only the name / description can change, not the questions or timing
+            data = {k: v for k, v in request.data.items() if k in ("title", "description", "job_role")}
+            if not data:
+                return Response(
+                    {"success": False, "error": "A published test can only be renamed."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        serializer = TestSerializer(test, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return success(serializer.data)
@@ -92,11 +96,11 @@ class TestDetailView(APIView):
             return Response(
                 {"success": False, "error": "Test not found."}, status=404
             )
-        if test.status != Test.Status.DRAFT:
-            return Response(
-                {"success": False, "error": "Only draft tests can be deleted."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # Deletes its questions, invites, candidates' sessions and answers too.
+        from exam_sessions.models import Session
+        from exam_sessions.storage import delete_session_files
+        for session_id in Session.objects.filter(invite__test=test).values_list("id", flat=True):
+            delete_session_files(session_id)
         test.delete()
         return success("Test deleted.")
 

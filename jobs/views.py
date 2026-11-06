@@ -111,6 +111,19 @@ class JobPostDetailView(APIView):
         serializer.save()
         return success(serializer.data)
 
+    def delete(self, request, pk):
+        """Delete the job with all its applicants, their CVs / cover letters and CV imports."""
+        job = self._get_job(pk, request.user)
+        if not job:
+            return Response({"success": False, "error": "Job not found."}, status=404)
+        count = job.applications.count()
+        for app in job.applications.all():
+            for f in (app.cv, app.cover_letter):
+                if f:
+                    f.delete(save=False)
+        job.delete()
+        return success({"deleted_applications": count})
+
 
 class OpenJobView(APIView):
     permission_classes = [IsAuthenticated]

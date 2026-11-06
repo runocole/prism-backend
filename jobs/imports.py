@@ -143,6 +143,7 @@ def process_cv_import(import_id, stored_files: list[tuple[str, str]]):
                 problem = "No email address found in the CV"
             elif Application.objects.filter(job=job, email__iexact=email).exists():
                 batch.duplicate_count += 1
+                problem = f"{email} is already a candidate for this job, so no email was sent"
             else:
                 application = Application(
                     job=job,

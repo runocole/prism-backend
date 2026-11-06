@@ -43,6 +43,32 @@ def default_expiry():
     return timezone.now() + timedelta(hours=hours)
 
 
+def get_or_refresh_invite(test, name, email, expires_at, user):
+    """
+    Sending a test again to the same person re-sends their EXISTING link
+    (with the new expiry) instead of cancelling it, so every email they
+    received keeps working. A new invite is only made if they have none
+    that's still usable.
+    """
+    existing = (
+        Invite.objects.filter(
+            test=test, candidate_email__iexact=email,
+            status__in=[Invite.Status.PENDING, Invite.Status.ACTIVE],
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if existing:
+        existing.candidate_name = name
+        existing.expires_at = max(existing.expires_at, expires_at)
+        existing.save(update_fields=["candidate_name", "expires_at"])
+        return existing
+    return Invite.objects.create(
+        test=test, candidate_name=name, candidate_email=email,
+        expires_at=expires_at, created_by=user,
+    )
+
+
 class InviteListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -75,19 +101,9 @@ class InviteListCreateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Expire any existing pending invite for this candidate + test
-        Invite.objects.filter(
-            test=test,
-            candidate_email=d["candidate_email"],
-            status=Invite.Status.PENDING,
-        ).update(status=Invite.Status.EXPIRED)
-
-        invite = Invite.objects.create(
-            test=test,
-            candidate_name=d["candidate_name"],
-            candidate_email=d["candidate_email"],
-            expires_at=d.get("expires_at") or default_expiry(),
-            created_by=request.user,
+        invite = get_or_refresh_invite(
+            test, d["candidate_name"], d["candidate_email"],
+            d.get("expires_at") or default_expiry(), request.user,
         )
 
         run_in_background(send_invite_emails, [invite.id])
@@ -122,22 +138,9 @@ class BatchInviteCreateView(APIView):
         created_invites = []
 
         for candidate in d["candidates"]:
-            Invite.objects.filter(
-                test=test,
-                candidate_email=candidate["email"],
-                status=Invite.Status.PENDING,
-            ).update(status=Invite.Status.EXPIRED)
-
-            create_kwargs = {}
-            if expires_at:
-                create_kwargs["expires_at"] = expires_at
-
-            invite = Invite.objects.create(
-                test=test,
-                candidate_name=candidate["name"],
-                candidate_email=candidate["email"],
-                created_by=request.user,
-                **create_kwargs,
+            invite = get_or_refresh_invite(
+                test, candidate["name"], candidate["email"],
+                expires_at or default_expiry(), request.user,
             )
             created_invites.append(invite)
 
@@ -201,25 +204,30 @@ class ValidateInviteView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, token):
+        def gone(code, message, http=status.HTTP_410_GONE):
+            # "code" lets the page show the right message instead of a bare 404
+            return Response({"success": False, "code": code, "error": message}, status=http)
+
         try:
             invite = Invite.objects.select_related("test").get(token=token)
         except Invite.DoesNotExist:
-            return Response(
-                {"success": False, "error": "Invalid invite link."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return gone("invalid", "This test link isn't valid. Please check you copied the whole link.",
+                        status.HTTP_404_NOT_FOUND)
 
-        if invite.status not in (Invite.Status.PENDING, Invite.Status.ACTIVE):
-            return Response(
-                {"success": False, "error": "This invite has expired or already been used."},
-                status=status.HTTP_410_GONE,
-            )
+        if invite.status == Invite.Status.SUBMITTED:
+            return gone("submitted", "You have already completed this assessment. Thank you!")
+
+        if invite.status == Invite.Status.EXPIRED:
+            newer = Invite.objects.filter(
+                test=invite.test, candidate_email__iexact=invite.candidate_email,
+                created_at__gt=invite.created_at,
+            ).exists()
+            if newer:
+                return gone("replaced", "This link was replaced by a newer one. Please use the most recent email we sent you.")
+            return gone("expired", "This test link has expired. Please contact the recruitment team.")
 
         if timezone.now() > invite.expires_at:
-            return Response(
-                {"success": False, "error": "This invite link has expired."},
-                status=status.HTTP_410_GONE,
-            )
+            return gone("expired", "This test link has expired. Please contact the recruitment team.")
 
         return success({
             "candidate_name": invite.candidate_name,

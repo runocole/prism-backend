@@ -160,6 +160,9 @@ class Violation(models.Model):
         FULLSCREEN_EXIT = "fullscreen_exit", "Exited Full Screen"
         WEBCAM_LOST = "webcam_lost", "Webcam Disconnected"
         RIGHT_CLICK = "right_click", "Right Click"
+        FACE_NOT_VISIBLE = "face_not_visible", "Face not visible"
+        MULTIPLE_FACES = "multiple_faces", "More than one face"
+        LOOKING_AWAY = "looking_away", "Looking away"
 
     session = models.ForeignKey(
         Session, on_delete=models.CASCADE, related_name="violations"

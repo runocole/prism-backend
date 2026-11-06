@@ -74,3 +74,12 @@ def read_file(object_key: str) -> bytes:
             return f.read()
     obj = _get_client().get_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=object_key)
     return obj["Body"].read()
+
+
+def delete_session_files(session_id: int):
+    """Remove a session's recording chunks and snapshot (local media only)."""
+    if settings.STORAGE_ENDPOINT_URL:
+        return  # object storage: left to the bucket's own lifecycle rules
+    import shutil
+    for folder in ("recordings", "snapshots"):
+        shutil.rmtree(os.path.join(settings.MEDIA_ROOT, folder, str(session_id)), ignore_errors=True)
