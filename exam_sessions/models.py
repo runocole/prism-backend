@@ -40,6 +40,12 @@ class Session(models.Model):
     # Object storage path to the assembled recording file
     recording_path = models.CharField(max_length=500, blank=True)
 
+    # Live monitor — updated by the candidate's browser every ~10 seconds
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    answered_count = models.PositiveIntegerField(default=0)
+    snapshot_path = models.CharField(max_length=500, blank=True)
+    snapshot_at = models.DateTimeField(null=True, blank=True)
+
     # Reviewer's final decision (set by SubmitResultView)
     class Decision(models.TextChoices):
         PASS = "pass", "Pass"

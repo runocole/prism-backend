@@ -18,6 +18,9 @@ HR / Reviewer endpoints (JWT required):
   POST /api/v1/sessions/<id>/result/              — submit pass/fail decision
 """
 
+from datetime import timedelta
+
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -36,7 +39,7 @@ from .serializers import (
     ReviewScoreSerializer,
 )
 from .services import submit_session
-from .storage import upload_file, generate_signed_url
+from .storage import upload_file, generate_signed_url, read_file
 
 
 def success(data, code=status.HTTP_200_OK):
@@ -262,7 +265,105 @@ class UploadRecordingChunkView(APIView):
         return success({"chunk_index": chunk_index, "key": object_key}, status.HTTP_201_CREATED)
 
 
+class SnapshotUploadView(APIView):
+    """
+    Candidate heartbeat for the live monitor, sent every ~10 seconds:
+    a small webcam JPEG (optional) + how many questions are answered so far.
+    Only the latest snapshot is kept: snapshots/<session_id>/latest.jpg
+    """
+    authentication_classes = [InviteTokenAuthentication]
+    permission_classes = [AllowAny]
+
+    MAX_BYTES = 300 * 1024
+
+    def post(self, request, pk):
+        session = Session.objects.filter(pk=pk, invite=request.auth).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        if session.status != Session.Status.IN_PROGRESS:
+            return success({"status": session.status})
+
+        now = timezone.now()
+        session.last_seen_at = now
+        fields = ["last_seen_at"]
+
+        try:
+            answered = int(request.data.get("answered", session.answered_count))
+            session.answered_count = max(0, min(answered, 1000))
+            fields.append("answered_count")
+        except (TypeError, ValueError):
+            pass
+
+        image = request.FILES.get("image")
+        if image and image.size <= self.MAX_BYTES:
+            key = f"snapshots/{session.id}/latest.jpg"
+            upload_file(image, key, content_type="image/jpeg")
+            session.snapshot_path = key
+            session.snapshot_at = now
+            fields += ["snapshot_path", "snapshot_at"]
+
+        session.save(update_fields=fields)
+        return success({"status": session.status})
+
+
 # ─── HR / Reviewer Views ──────────────────────────────────────────────────────
+
+class LiveSessionsView(APIView):
+    """Staff: everyone taking a test right now, for the Live page (polled every few seconds)."""
+    permission_classes = [IsAuthenticated]
+
+    ONLINE_WINDOW = timedelta(seconds=35)
+
+    def get(self, request):
+        sessions = (
+            Session.objects.filter(status=Session.Status.IN_PROGRESS)
+            .select_related("invite__test")
+            .order_by("started_at")
+        )
+        now = timezone.now()
+        data = []
+        for s in sessions:
+            if s.is_expired:
+                continue
+            recent = list(s.violations.order_by("-occurred_at")[:5])
+            data.append({
+                "id": s.id,
+                "candidate_name": s.invite.candidate_name,
+                "candidate_email": s.invite.candidate_email,
+                "test_title": s.invite.test.title,
+                "started_at": s.started_at,
+                "remaining_seconds": s.remaining_seconds,
+                "answered_count": s.answered_count,
+                "question_count": s.invite.test.questions.count(),
+                "violation_count": s.violations.count(),
+                "recent_violations": [
+                    {"type": v.type, "label": v.get_type_display(), "occurred_at": v.occurred_at}
+                    for v in recent
+                ],
+                "last_seen_at": s.last_seen_at,
+                "online": bool(s.last_seen_at and now - s.last_seen_at < self.ONLINE_WINDOW),
+                "snapshot_at": s.snapshot_at,
+            })
+        return success(data)
+
+
+class SnapshotView(APIView):
+    """Staff: the latest webcam snapshot for a session (image/jpeg). Never public."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        session = Session.objects.filter(pk=pk).only("snapshot_path").first()
+        if not session or not session.snapshot_path:
+            return Response({"success": False, "error": "No snapshot yet."}, status=404)
+        try:
+            data = read_file(session.snapshot_path)
+        except Exception:
+            return Response({"success": False, "error": "Snapshot not available."}, status=404)
+        response = HttpResponse(data, content_type="image/jpeg")
+        response["Cache-Control"] = "no-store"
+        return response
+
+
 
 class SessionListView(APIView):
     """Staff: list all sessions (every staff account sees all of them)."""

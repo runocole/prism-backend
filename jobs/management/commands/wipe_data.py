@@ -25,7 +25,7 @@ from invites.models import Invite
 from jobs.models import Application, Blacklist, CvImport, JobLink, JobPost
 from users.models import User
 
-MEDIA_DIRS = ["applications", "recordings", "imports"]
+MEDIA_DIRS = ["applications", "recordings", "imports", "snapshots"]
 
 
 class Command(BaseCommand):

@@ -66,3 +66,11 @@ def generate_signed_url(object_key: str, expires_in: int = 3600) -> str:
         },
         ExpiresIn=expires_in,
     )
+
+def read_file(object_key: str) -> bytes:
+    """Read a stored file (local media in dev, object storage in production)."""
+    if not settings.STORAGE_ENDPOINT_URL:
+        with open(os.path.join(settings.MEDIA_ROOT, object_key), "rb") as f:
+            return f.read()
+    obj = _get_client().get_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=object_key)
+    return obj["Body"].read()
