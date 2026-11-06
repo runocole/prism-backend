@@ -22,7 +22,11 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("email")
         parser.add_argument("--name", help='Display name, e.g. "OTIC Admin" (shown as "Graded by")')
-        parser.add_argument("--role", choices=[r.value for r in User.Role], default=User.Role.HR)
+        parser.add_argument(
+            "--role",
+            choices=[r.value for r in User.Role],
+            help="hr or reviewer. New accounts default to hr; existing accounts keep their role if omitted.",
+        )
         parser.add_argument("--reset-password", action="store_true")
 
     def handle(self, *args, email, name, role, reset_password, **options):
@@ -35,7 +39,10 @@ class Command(BaseCommand):
         if name:
             first, _, last = name.strip().partition(" ")
             user.first_name, user.last_name = first, last
-        user.role = role
+        if role:
+            user.role = role
+        elif created:
+            user.role = User.Role.HR
         user.is_active = True
         user.is_staff = True  # Django admin access
 
