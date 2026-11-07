@@ -43,7 +43,7 @@ def default_expiry():
     return timezone.now() + timedelta(hours=hours)
 
 
-def get_or_refresh_invite(test, name, email, expires_at, user, job=None):
+def get_or_refresh_invite(test, name, email, expires_at, user, job=None, opens_at=None):
     """
     Sending a test again to the same person re-sends their EXISTING link
     (with the new expiry) instead of cancelling it, so every email they
@@ -63,11 +63,13 @@ def get_or_refresh_invite(test, name, email, expires_at, user, job=None):
         existing.expires_at = max(existing.expires_at, expires_at)
         if job is not None:
             existing.job = job
-        existing.save(update_fields=["candidate_name", "expires_at", "job"])
+        if opens_at is not None or existing.status == Invite.Status.PENDING:
+            existing.opens_at = opens_at
+        existing.save(update_fields=["candidate_name", "expires_at", "job", "opens_at"])
         return existing
     return Invite.objects.create(
         test=test, candidate_name=name, candidate_email=email,
-        expires_at=expires_at, created_by=user, job=job,
+        expires_at=expires_at, created_by=user, job=job, opens_at=opens_at,
     )
 
 
@@ -100,17 +102,17 @@ class InviteListCreateView(APIView):
         try:
             test = Test.objects.get(
                 pk=d["test_id"],
-                status=Test.Status.PUBLISHED,
             )
         except Test.DoesNotExist:
             return Response(
-                {"success": False, "error": "Published test not found."},
+                {"success": False, "error": "Test not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         invite = get_or_refresh_invite(
             test, d["candidate_name"], d["candidate_email"],
             d.get("expires_at") or default_expiry(), request.user, job=_job_from(d),
+            opens_at=d.get("opens_at"),
         )
 
         run_in_background(send_invite_emails, [invite.id])
@@ -133,11 +135,10 @@ class BatchInviteCreateView(APIView):
         try:
             test = Test.objects.get(
                 pk=d["test_id"],
-                status=Test.Status.PUBLISHED,
             )
         except Test.DoesNotExist:
             return Response(
-                {"success": False, "error": "Published test not found."},
+                {"success": False, "error": "Test not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -149,6 +150,7 @@ class BatchInviteCreateView(APIView):
             invite = get_or_refresh_invite(
                 test, candidate["name"], candidate["email"],
                 expires_at or default_expiry(), request.user, job=job,
+                opens_at=d.get("opens_at"),
             )
             created_invites.append(invite)
 
@@ -236,6 +238,13 @@ class ValidateInviteView(APIView):
 
         if timezone.now() > invite.expires_at:
             return gone("expired", "This test link has expired. Please contact the recruitment team.")
+
+        if invite.opens_at and timezone.now() < invite.opens_at:
+            from .emails import when
+            return Response({
+                "success": False, "code": "not_open", "opens_at": invite.opens_at,
+                "error": f"Your assessment opens on {when(invite.opens_at)}. Please come back then.",
+            }, status=status.HTTP_403_FORBIDDEN)
 
         return success({
             "candidate_name": invite.candidate_name,

@@ -86,7 +86,7 @@ def recording_chunk_keys(session_id: int) -> list[str]:
         for root in _local_roots():
             folder = os.path.join(root, "recordings", str(session_id))
             if os.path.isdir(folder):
-                names |= {n for n in os.listdir(folder) if n.endswith(".webm")}
+                names |= {n for n in os.listdir(folder) if n.startswith("chunk_") and n.endswith(".webm")}
         return [prefix + n for n in sorted(names)]
     keys, token = [], None
     client = _get_client()
@@ -130,3 +130,50 @@ def delete_session_files(session_id: int):
     for root in _local_roots():
         for folder in ("recordings", "snapshots"):
             shutil.rmtree(os.path.join(root, folder, str(session_id)), ignore_errors=True)
+
+
+# ── Whole recording as one file (local disk) ─────────────────────────────────
+
+def full_recording_path(session_id: int) -> str:
+    return os.path.join(str(settings.PRIVATE_MEDIA_ROOT), "recordings", str(session_id), "full.webm")
+
+
+def assemble_recording(session_id: int) -> str | None:
+    """
+    Join the 30-second pieces into recordings/<id>/full.webm (once, or again
+    if new pieces arrived). If ffmpeg is installed it also fixes the video's
+    duration so the seek bar works; without it the joined file still plays.
+    Returns the file path, or None if there's nothing recorded.
+    """
+    if settings.STORAGE_ENDPOINT_URL:
+        return None
+    keys = recording_chunk_keys(session_id)
+    keys = [k for k in keys if not k.endswith("/full.webm")]
+    if not keys:
+        return None
+    out = full_recording_path(session_id)
+    newest = max(os.path.getmtime(_local_path(k)) for k in keys)
+    if os.path.exists(out) and os.path.getmtime(out) >= newest:
+        return out
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    joined = out + ".joined"
+    with open(joined, "wb") as dst:
+        for k in keys:
+            with open(_local_path(k), "rb") as src:
+                shutil.copyfileobj(src, dst, 1024 * 1024)
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        import subprocess
+        fixed = out + ".fixed.webm"
+        result = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-fflags", "+genpts", "-i", joined, "-c", "copy", fixed],
+            capture_output=True, timeout=600,
+        )
+        if result.returncode == 0 and os.path.getsize(fixed) > 0:
+            os.replace(fixed, out)
+            os.remove(joined)
+            return out
+        if os.path.exists(fixed):
+            os.remove(fixed)
+    os.replace(joined, out)
+    return out

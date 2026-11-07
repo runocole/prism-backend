@@ -1,70 +1,78 @@
 """
 invites/emails.py
 ──────────────────
-Sends the assessment invite email. Used by:
-  - single / batch invites (invites/views.py)
-  - "Email screened-in candidates" (jobs/views.py BatchEmailView)
+The assessment invitation email (branded — see config/emails.py).
 
-Always called from a background thread (config.background.run_in_background)
-so HR's request doesn't wait on SMTP.
+Shows when the assessment opens (opens_at, e.g. tomorrow 8:00 AM) and when the
+link expires, with a "Start assessment" button. Always sent from a background
+thread (config.background.run_in_background).
 """
 
 import logging
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
+
+from config.emails import send_branded
 
 from .models import Invite
 
 logger = logging.getLogger(__name__)
 
 
-def build_invite_email(invite: Invite, job_title: str | None = None) -> tuple[str, str]:
-    role = job_title or invite.test.job_role or invite.test.title
-    first_name = (invite.candidate_name or "").split(" ")[0] or "Candidate"
-    exam_link = f"{settings.FRONTEND_URL}/c/{invite.token}"
-    expires = timezone.localtime(invite.expires_at).strftime("%d %b %Y at %H:%M %Z")
+def when(dt) -> str:
+    """e.g. 'Monday, 9 November 2026 at 8:00 AM' in the server's time zone (Lagos)."""
+    local = timezone.localtime(dt)
+    hour = local.strftime("%I").lstrip("0") or "12"
+    return f"{local.strftime('%A')}, {local.day} {local.strftime('%B %Y')} at {hour}:{local.strftime('%M %p')}"
 
-    subject = f"APPLICATION ASSESSMENT — {role}"
-    message = (
-        f"Dear {first_name},\n\n"
-        f"You have been invited to take an assessment for the {role} position "
-        f"at {settings.COMPANY_NAME}.\n\n"
-        f"Please complete your assessment using the link below:\n"
-        f"{exam_link}\n\n"
-        f"IMPORTANT DETAILS:\n"
-        f"- This link is unique to you. Do not share it.\n"
-        f"- The link expires on {expires}.\n"
-        f"- The assessment lasts {invite.test.duration_mins} minutes once started, "
-        f"and must be completed in one sitting.\n"
-        f"- Use a desktop browser (Chrome, Firefox or Edge) in a quiet place with a "
-        f"stable internet connection.\n"
-        f"- Your webcam will be required throughout the assessment.\n\n"
-        f"If you have any issues, reply to this email.\n\n"
-        f"Best regards,\n{settings.COMPANY_NAME} Recruitment Team"
-    )
-    return subject, message
+
+def _role(invite: Invite, job_title: str | None) -> str:
+    if job_title:
+        return job_title
+    if invite.job_id:
+        return invite.job.title
+    return invite.test.job_role or invite.test.title
 
 
 def send_invite_email(invite: Invite, job_title: str | None = None) -> bool:
-    """Send one invite email. Returns True on success, logs and returns False on failure."""
-    subject, message = build_invite_email(invite, job_title)
-    try:
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[invite.candidate_email],
-            fail_silently=False,
-        )
-        return True
-    except Exception:
-        logger.exception("Failed to send invite %s to %s", invite.id, invite.candidate_email)
-        return False
+    role = _role(invite, job_title)
+    first = (invite.candidate_name or "").split(" ")[0] or "there"
+    link = f"{settings.FRONTEND_URL}/c/{invite.token}"
+    details = [("Position", role)]
+    if invite.opens_at:
+        details.append(("Assessment opens", when(invite.opens_at)))
+    details += [
+        ("Link expires", when(invite.expires_at)),
+        ("Duration", f"{invite.test.duration_mins} minutes, in one sitting"),
+    ]
+    paragraphs = [
+        f"Dear {first},",
+        f"Thank you for your interest in the {role} role at {settings.COMPANY_NAME}. "
+        "You have been invited to take an online assessment, the next step in our recruitment process.",
+    ]
+    if invite.opens_at:
+        paragraphs.append("Your link will work from the opening time below. We've sent it early so you have time to prepare.")
+    return send_branded(
+        invite.candidate_email,
+        f"Your assessment for {role} – {settings.COMPANY_NAME}",
+        eyebrow="Assessment invitation",
+        heading="You're invited to an assessment",
+        preheader=f"Your {role} assessment" + (f" opens {when(invite.opens_at)}" if invite.opens_at else ""),
+        paragraphs=paragraphs,
+        details=details,
+        details_title="Assessment details",
+        button=("Start assessment", link),
+        after=[
+            "Before you begin: use a laptop or desktop with a working webcam and microphone, in a quiet, well-lit place "
+            "with a stable internet connection. When you start, you'll wait briefly while a member of our team checks you in.",
+            "This link is personal to you. Please don't share it.",
+        ],
+        stage=2,
+    )
 
 
 def send_invite_emails(invite_ids: list[int]):
     """Background job for single/batch invites."""
-    for invite in Invite.objects.select_related("test").filter(pk__in=invite_ids):
+    for invite in Invite.objects.select_related("test", "job").filter(pk__in=invite_ids):
         send_invite_email(invite)

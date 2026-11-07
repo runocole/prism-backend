@@ -18,10 +18,11 @@ HR / Reviewer endpoints (JWT required):
   POST /api/v1/sessions/<id>/result/              — submit pass/fail decision
 """
 
+import os
 from datetime import timedelta
 
 from django.core import signing
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -43,7 +44,7 @@ from .serializers import (
 from .services import submit_session
 from . import livekit
 from .emails import send_outcome_emails
-from .storage import upload_file, read_file, recording_chunk_keys, iter_recording
+from .storage import upload_file, read_file, recording_chunk_keys, iter_recording, assemble_recording
 from config.background import run_in_background
 
 
@@ -64,6 +65,12 @@ class StartSessionView(APIView):
 
     def post(self, request):
         invite = request.auth
+
+        if invite.opens_at and timezone.now() < invite.opens_at and not hasattr(invite, "session"):
+            return Response(
+                {"success": False, "code": "not_open", "error": "Your assessment hasn't opened yet."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Return existing session on page refresh
         if hasattr(invite, "session"):
@@ -501,9 +508,10 @@ class SessionDetailView(APIView):
 
 class RecordingURLView(APIView):
     """
-    Staff: a short-lived link to the WHOLE recording (all 30-second pieces
-    joined). The link is signed, so it works in a <video> tag without the
-    login header, expires after an hour, and recordings are never public.
+    Staff: a short-lived link to the WHOLE recording, with sound. The 30-second
+    pieces are joined into one file first (quick; repeated only if new pieces
+    arrived). The link is signed, expires after an hour, and recordings are
+    never public.
     """
     permission_classes = [IsAuthenticated]
 
@@ -512,7 +520,8 @@ class RecordingURLView(APIView):
             return Response({"success": False, "error": "Session not found."}, status=404)
         chunks = recording_chunk_keys(pk)
         if not chunks:
-            return Response({"success": False, "error": "No recording available yet."}, status=404)
+            return Response({"success": False, "error": "No recording was uploaded for this session."}, status=404)
+        assemble_recording(pk)
         sig = signing.TimestampSigner(salt="recording").sign(str(pk))
         return success({
             "path": f"/api/v1/sessions/{pk}/recording/stream/?sig={sig}",
@@ -523,20 +532,68 @@ class RecordingURLView(APIView):
 
 
 class RecordingStreamView(APIView):
-    """The joined recording (video/webm), for a valid signed link only."""
+    """
+    The recording (video/webm) for a valid signed link. Supports byte ranges,
+    so the browser fetches it a slice at a time as it plays and the seek bar
+    works — no single long download (which the server would cut off).
+    """
     permission_classes = [AllowAny]
     authentication_classes = []
+
+    SLICE = 4 * 1024 * 1024  # max bytes per range reply
 
     def get(self, request, pk):
         try:
             value = signing.TimestampSigner(salt="recording").unsign(request.query_params.get("sig", ""), max_age=3600)
         except signing.BadSignature:
             return Response({"success": False, "error": "This recording link has expired. Reopen the result."}, status=403)
-        if value != str(pk) or not recording_chunk_keys(pk):
+        if value != str(pk):
             return Response({"success": False, "error": "Recording not found."}, status=404)
-        response = StreamingHttpResponse(iter_recording(pk), content_type="video/webm")
-        response["Cache-Control"] = "private, no-store"
-        response["Content-Disposition"] = f'inline; filename="session-{pk}.webm"'
+
+        path = assemble_recording(pk)
+        if not path:
+            # Object storage: stream the pieces (no ranges)
+            if not recording_chunk_keys(pk):
+                return Response({"success": False, "error": "Recording not found."}, status=404)
+            response = StreamingHttpResponse(iter_recording(pk), content_type="video/webm")
+            response["Cache-Control"] = "private, no-store"
+            return response
+
+        size = os.path.getsize(path)
+        start, end = 0, size - 1
+        header = request.headers.get("Range", "")
+        partial = header.startswith("bytes=")
+        if not partial:
+            # Plain request (e.g. a download): the whole file
+            response = FileResponse(open(path, "rb"), content_type="video/webm")
+            response["Accept-Ranges"] = "bytes"
+            response["Cache-Control"] = "private, max-age=3600"
+            return response
+        if partial:
+            try:
+                first, _, last = header[6:].split(",")[0].partition("-")
+                if first:
+                    start = int(first)
+                    end = int(last) if last else size - 1
+                else:  # "bytes=-500": the last 500 bytes
+                    start = max(0, size - int(last))
+            except ValueError:
+                partial = False
+        if start >= size:
+            response = HttpResponse(status=416)
+            response["Content-Range"] = f"bytes */{size}"
+            return response
+        end = min(end, size - 1, start + self.SLICE - 1)
+
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(end - start + 1)
+        response = HttpResponse(data, status=206 if partial else 200, content_type="video/webm")
+        if partial:
+            response["Content-Range"] = f"bytes {start}-{end}/{size}"
+        response["Accept-Ranges"] = "bytes"
+        response["Content-Length"] = str(len(data))
+        response["Cache-Control"] = "private, max-age=3600"
         return response
 
 

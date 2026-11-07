@@ -35,6 +35,12 @@ from .serializers import TestSerializer, TestListSerializer, QuestionSerializer
 from .tasks import process_question_import
 
 
+def touch(test_id):
+    """Questions changed: update the test's 'last edited' time."""
+    from django.utils import timezone
+    Test.objects.filter(pk=test_id).update(updated_at=timezone.now())
+
+
 def success(data, code=status.HTTP_200_OK):
     return Response({"success": True, "data": data}, status=code)
 
@@ -76,16 +82,8 @@ class TestDetailView(APIView):
             return Response(
                 {"success": False, "error": "Test not found."}, status=404
             )
-        data = request.data
-        if test.status != Test.Status.DRAFT:
-            # Published tests: only the name / description can change, not the questions or timing
-            data = {k: v for k, v in request.data.items() if k in ("title", "description", "job_role")}
-            if not data:
-                return Response(
-                    {"success": False, "error": "A published test can only be renamed."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        serializer = TestSerializer(test, data=data, partial=True)
+        # Tests can be edited at any time (name, timing, questions).
+        serializer = TestSerializer(test, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return success(serializer.data)
@@ -136,7 +134,7 @@ class QuestionListCreateView(APIView):
 
     def _get_draft_test(self, pk, user):
         try:
-            return Test.objects.get(pk=pk, status=Test.Status.DRAFT)
+            return Test.objects.get(pk=pk)
         except Test.DoesNotExist:
             return None
 
@@ -151,6 +149,7 @@ class QuestionListCreateView(APIView):
         serializer = QuestionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         question = serializer.save(test=test, order_index=next_order)
+        touch(test.pk)
         return success(QuestionSerializer(question).data, status.HTTP_201_CREATED)
 
 
@@ -162,7 +161,6 @@ class QuestionDetailView(APIView):
             return Question.objects.get(
                 pk=q_pk,
                 test__pk=test_pk,
-                test__status=Test.Status.DRAFT,
             )
         except Question.DoesNotExist:
             return None
@@ -176,6 +174,7 @@ class QuestionDetailView(APIView):
         serializer = QuestionSerializer(question, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        touch(question.test_id)
         return success(serializer.data)
 
     def delete(self, request, pk, q_pk):
@@ -184,8 +183,14 @@ class QuestionDetailView(APIView):
             return Response(
                 {"success": False, "error": "Question not found."}, status=404
             )
+        if question.answer_set.exists():
+            return Response(
+                {"success": False, "error": "Candidates have already answered this question, so it can't be deleted. You can still change its wording."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         test = question.test
         question.delete()
+        touch(test.pk)
 
         # Close the gap so order_index stays 0, 1, 2, ...
         for index, q in enumerate(test.questions.order_by("order_index", "id")):
@@ -209,7 +214,7 @@ class QuestionImageView(APIView):
     MAX_BYTES = 5 * 1024 * 1024
 
     def _question(self, pk, q_pk):
-        return Question.objects.filter(pk=q_pk, test__pk=pk, test__status=Test.Status.DRAFT).first()
+        return Question.objects.filter(pk=q_pk, test__pk=pk).first()
 
     def post(self, request, pk, q_pk):
         question = self._question(pk, q_pk)
@@ -230,6 +235,7 @@ class QuestionImageView(APIView):
             question.image.delete(save=False)
         question.image = image
         question.save(update_fields=["image"])
+        touch(question.test_id)
         return success(QuestionSerializer(question).data)
 
     def delete(self, request, pk, q_pk):

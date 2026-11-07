@@ -18,7 +18,7 @@ class InviteSerializer(serializers.ModelSerializer):
         model = Invite
         fields = (
             "id", "test", "test_title", "test_job_role", "job", "job_title", "candidate_name",
-            "candidate_email", "token", "status", "expires_at",
+            "candidate_email", "token", "status", "expires_at", "opens_at",
             "invite_url", "created_at",
         )
         read_only_fields = (
@@ -36,6 +36,7 @@ class SingleInviteCreateSerializer(serializers.Serializer):
     candidate_name = serializers.CharField(max_length=255)
     candidate_email = serializers.EmailField()
     expires_at = serializers.DateTimeField(required=False)
+    opens_at = serializers.DateTimeField(required=False, allow_null=True)
     job_id = serializers.IntegerField(required=False, allow_null=True)
 
 
@@ -52,4 +53,5 @@ class BatchInviteCreateSerializer(serializers.Serializer):
     test_id = serializers.IntegerField()
     candidates = CandidateSerializer(many=True)
     expires_at = serializers.DateTimeField(required=False)
+    opens_at = serializers.DateTimeField(required=False, allow_null=True)
     job_id = serializers.IntegerField(required=False, allow_null=True)

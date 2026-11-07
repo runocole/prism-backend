@@ -74,5 +74,5 @@ class TestListSerializer(serializers.ModelSerializer):
         model = Test
         fields = (
             "id", "title", "description", "job_role", "duration_mins",
-            "pass_mark_pct", "status", "question_count", "created_at",
+            "pass_mark_pct", "status", "question_count", "created_at", "updated_at",
         )

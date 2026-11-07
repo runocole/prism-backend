@@ -45,6 +45,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from config.background import run_in_background
 
 from .blacklist_import import BlacklistFileError, import_blacklist
+from .emails import send_application_received
 from .imports import process_cv_import, send_form_email
 from .models import JobPost, JobLink, Application, Blacklist, CvImport
 from .questions import (
@@ -311,6 +312,7 @@ class PublicApplicationView(APIView):
             invitee.status = Application.Status.PENDING
             invitee.form_completed_at = now
             invitee.save(update_fields=["screening_answers", "status", "form_completed_at"])
+            run_in_background(send_application_received, invitee.id)
             return success({"message": "Answers submitted.", "id": invitee.id}, status.HTTP_201_CREATED)
 
         email = (request.data.get("email") or "").strip()
@@ -329,6 +331,7 @@ class PublicApplicationView(APIView):
             screening_answers=answers,
             form_completed_at=now,
         )
+        run_in_background(send_application_received, application.id)
         return success(
             {"message": "Application submitted successfully.", "id": application.id},
             status.HTTP_201_CREATED,
@@ -637,10 +640,10 @@ class BatchEmailView(APIView):
 
         try:
             test = Test.objects.get(
-                pk=test_id, status=Test.Status.PUBLISHED
+                pk=test_id
             )
         except Test.DoesNotExist:
-            return Response({"success": False, "error": "Published test not found."}, status=404)
+            return Response({"success": False, "error": "Test not found."}, status=404)
 
         screened_in = list(job.applications.filter(status=Application.Status.SCREENED_IN))
         if not screened_in:
@@ -649,7 +652,20 @@ class BatchEmailView(APIView):
                 status=400,
             )
 
-        expires_at = timezone.now() + timedelta(hours=48)
+        # When the test link starts working, and when it stops (from the send dialog)
+        from django.utils.dateparse import parse_datetime
+        opens_at = parse_datetime(str(request.data.get("opens_at") or ""))
+        expires_at = parse_datetime(str(request.data.get("expires_at") or "")) or timezone.now() + timedelta(hours=48)
+        if not timezone.is_aware(expires_at):
+            expires_at = timezone.make_aware(expires_at)
+        if opens_at and not timezone.is_aware(opens_at):
+            opens_at = timezone.make_aware(opens_at)
+        if expires_at <= timezone.now():
+            return Response({"success": False, "error": "The expiry time has already passed."}, status=400)
+        if opens_at and opens_at >= expires_at:
+            return Response({"success": False, "error": "The test must open before it expires."}, status=400)
+        if not test.questions.exists():
+            return Response({"success": False, "error": "That test has no questions yet."}, status=400)
         pairs = []
         for app in screened_in:
             invite = Invite.objects.create(
@@ -658,6 +674,7 @@ class BatchEmailView(APIView):
                 candidate_email=app.email,
                 created_by=request.user,
                 expires_at=expires_at,
+                opens_at=opens_at,
                 job=job,
             )
             pairs.append((invite.id, app.id))

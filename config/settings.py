@@ -157,7 +157,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+# Times in emails and pages are shown in Lagos time (stored in UTC in the database)
+TIME_ZONE = os.environ.get("TIME_ZONE", "Africa/Lagos")
 USE_I18N = True
 USE_TZ = True
 

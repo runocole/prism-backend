@@ -20,7 +20,6 @@ import anthropic
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.core.mail import EmailMessage
 from django.utils import timezone
 
 from config import ai
@@ -94,29 +93,9 @@ def form_url(application: Application) -> str:
 
 
 def send_form_email(application: Application) -> bool:
-    """Email an imported candidate their personal screening link."""
-    job = application.job
-    company = settings.COMPANY_NAME
-    first = application.first_name or "there"
-    body = (
-        f"Dear {first},\n\n"
-        f"Thank you for your interest in the {job.title} role at {company}.\n\n"
-        f"To move your application forward, please answer a few short questions here "
-        f"(it takes about 5 minutes):\n"
-        f"{form_url(application)}\n\n"
-        f"This link is personal to you, so please don't share it.\n\n"
-        f"Best regards,\n{company} Recruitment Team"
-    )
-    message = EmailMessage(
-        subject=f"{job.title} at {company}: next step in your application",
-        body=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to=[application.email],
-    )
-    try:
-        message.send(fail_silently=False)
-    except Exception:
-        logger.exception("Failed to send screening link to %s", application.email)
+    """Email an imported candidate their personal screening link (branded email)."""
+    from .emails import send_screening_link
+    if not send_screening_link(application, form_url(application)):
         return False
     application.form_sent_at = timezone.now()
     application.save(update_fields=["form_sent_at"])

@@ -1,20 +1,23 @@
 """
 exam_sessions/emails.py
 ────────────────────────
-Result emails after the reviewer's decision (sent from Results → "Email candidates").
+Result emails after the reviewer's decision (Results → "Email candidates"),
+in the branded design (config/emails.py):
 
-  passed → congratulations + next stage: interview date, time, address and
-           what to bring (HR fills these; time/date can differ per person)
-  failed → polite rejection, optionally with the reviewer's remarks
+  passed → "Congratulations" + next-stage details (date, time, address, what to
+           bring) + a "Confirm attendance" button (opens a reply to HR)
+  failed → a polite, generic message (reviewer remarks are never included)
 
 Called from a background thread.
 """
 
 import logging
+from urllib.parse import quote
 
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
+
+from config.emails import hr_address, send_branded
 
 from .models import Session
 
@@ -32,68 +35,65 @@ def _first_name(session: Session) -> str:
     return (session.invite.candidate_name or "").split(" ")[0] or "Candidate"
 
 
-def passed_email(session: Session, date: str, time: str, address: str, notes: str) -> tuple[str, str]:
-    company = settings.COMPANY_NAME
-    lines = [
-        f"Dear {_first_name(session)},",
-        "",
-        f"Congratulations! Following your assessment for the {_role(session)} role at {company}, "
-        "we are pleased to let you know that you have moved on to the next stage.",
-        "",
-        "Please come for the next stage as follows:",
-        f"  Date: {date}",
-        f"  Time: {time}",
-        f"  Address: {address}",
-    ]
+def send_passed(session: Session, date: str, time: str, address: str, notes: str) -> bool:
+    role = _role(session)
+    name = session.invite.candidate_name
+    subject = quote(f"Confirming attendance – {name} – {role}")
+    body = quote(f"Hello,\n\nI confirm I will attend on {date} at {time}.\n\nKind regards,\n{name}")
+    details = [("Position", role), ("Date", date), ("Time", time), ("Address", address)]
     if notes.strip():
-        lines += ["", "Please note / bring along:", notes.strip()]
-    lines += [
-        "",
-        "Kindly reply to this email to confirm that you will attend.",
-        "",
-        f"Best regards,\n{company} Recruitment Team",
-    ]
-    return f"Next stage: {_role(session)} at {company}", "\n".join(lines)
+        details.append(("Please bring / note", notes.strip()))
+    return send_branded(
+        session.invite.candidate_email,
+        f"Congratulations – next stage for {role} – {settings.COMPANY_NAME}",
+        eyebrow="Application update",
+        heading=f"Congratulations, {_first_name(session)}!",
+        preheader=f"You've progressed to the next stage for {role}.",
+        paragraphs=[
+            f"Following your assessment for the {role} role at {settings.COMPANY_NAME}, we're pleased to let you know "
+            "that you've progressed to the next stage of our recruitment process.",
+        ],
+        details=details,
+        details_title="Your interview details",
+        button=("Confirm your attendance", f"mailto:{hr_address()}?subject={subject}&body={body}"),
+        after=["We look forward to meeting you. If you can't make this time, please reply to this email."],
+        stage=3,
+    )
 
 
-def failed_email(session: Session, include_remarks: bool) -> tuple[str, str]:
-    company = settings.COMPANY_NAME
-    lines = [
-        f"Dear {_first_name(session)},",
-        "",
-        f"Thank you for taking the time to complete the assessment for the {_role(session)} role at {company}.",
-        "",
-        "Unfortunately, after careful review, we will not be moving forward with your application at this time.",
-    ]
-    remarks = (session.decision_notes or "").strip()
-    if include_remarks and remarks:
-        lines += ["", "Feedback from our review:", remarks]
-    lines += [
-        "",
-        "We appreciate your interest and wish you every success in your search.",
-        "",
-        f"Best regards,\n{company} Recruitment Team",
-    ]
-    return f"Your application for {_role(session)} at {company}", "\n".join(lines)
+def send_failed(session: Session) -> bool:
+    return send_branded(
+        session.invite.candidate_email,
+        f"Update on Your Application – {settings.COMPANY_NAME}",
+        eyebrow="Application update",
+        heading="Update on your application",
+        paragraphs=[
+            f"Dear {session.invite.candidate_name},",
+            "Thank you for taking the time to participate in our recruitment assessment for the position you "
+            f"applied for at {settings.COMPANY_NAME}.",
+            "After carefully reviewing your assessment results, we regret to inform you that you did not meet the "
+            "required pass mark to progress to the next stage of our recruitment process.",
+            "We sincerely appreciate your interest in joining our team and the time and effort you invested in the "
+            "application process.",
+            "Although we will not be progressing with your application at this time, we encourage you to keep "
+            f"developing your skills and to consider future opportunities with {settings.COMPANY_NAME}.",
+            "We wish you all the best in your future endeavours.",
+        ],
+        stage=4,
+    )
 
 
-def send_outcome_emails(passed: list[dict], failed_ids: list[int], address: str, notes: str, include_remarks: bool):
+def send_outcome_emails(passed: list[dict], failed_ids: list[int], address: str, notes: str, include_remarks: bool = False):
     """
-    passed: [{"session_id": 1, "date": "Mon 10 Nov 2026", "time": "10:00 AM"}, ...]
-    Marks each session as emailed when its email goes out.
+    passed: [{"session_id": 1, "date": "Monday, 10 November 2026", "time": "10:00 AM"}, ...]
+    Marks each session as emailed when its email goes out. (include_remarks is
+    ignored: rejection emails are always the generic message.)
     """
-    jobs = [(p["session_id"], "passed", p) for p in passed] + [(sid, "failed", None) for sid in failed_ids]
-    for session_id, kind, p in jobs:
-        session = Session.objects.select_related("invite__test", "invite__job").filter(pk=session_id).first()
-        if not session:
-            continue
-        if kind == "passed":
-            subject, body = passed_email(session, p["date"], p["time"], address, notes)
-        else:
-            subject, body = failed_email(session, include_remarks)
-        try:
-            EmailMessage(subject, body, settings.DEFAULT_FROM_EMAIL, [session.invite.candidate_email]).send()
-        except Exception:
-            logger.exception("Result email failed for session %s", session_id)
-            continue
-        Session.objects.filter(pk=session_id).update(outcome_email_kind=kind, outcome_emailed_at=timezone.now())
+    for p in passed:
+        session = Session.objects.select_related("invite__test", "invite__job").filter(pk=p["session_id"]).first()
+        if session and send_passed(session, p["date"], p["time"], address, notes):
+            Session.objects.filter(pk=session.pk).update(outcome_email_kind="passed", outcome_emailed_at=timezone.now())
+    for sid in failed_ids:
+        session = Session.objects.select_related("invite__test", "invite__job").filter(pk=sid).first()
+        if session and send_failed(session):
+            Session.objects.filter(pk=session.pk).update(outcome_email_kind="failed", outcome_emailed_at=timezone.now())
