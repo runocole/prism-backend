@@ -13,11 +13,17 @@ class InviteSerializer(serializers.ModelSerializer):
     test_job_role = serializers.CharField(source="test.job_role", read_only=True)
     invite_url = serializers.SerializerMethodField()
     job_title = serializers.CharField(source="job.title", read_only=True, default=None)
+    # The exam session (if they started) — for the "Review" link on Live
+    session_id = serializers.SerializerMethodField()
+
+    def get_session_id(self, obj):
+        session = getattr(obj, "session", None)
+        return session.id if session else None
 
     class Meta:
         model = Invite
         fields = (
-            "id", "test", "test_title", "test_job_role", "job", "job_title", "candidate_name",
+            "id", "test", "test_title", "test_job_role", "job", "job_title", "session_id", "candidate_name",
             "candidate_email", "token", "status", "expires_at", "opens_at",
             "invite_url", "created_at",
         )
