@@ -17,6 +17,12 @@ from django.db import models
 from django.conf import settings
 
 
+def question_image_path(instance, filename):
+    import os
+    ext = os.path.splitext(filename)[1].lower() or ".png"
+    return f"question_images/{uuid.uuid4().hex}{ext}"
+
+
 class Test(models.Model):
 
     class Status(models.TextChoices):
@@ -77,6 +83,8 @@ class Question(models.Model):
     payload = models.JSONField(default=dict)
 
     points = models.PositiveIntegerField(default=1)
+    # Optional diagram / picture shown to the candidate under the question
+    image = models.ImageField(upload_to=question_image_path, blank=True)
     order_index = models.PositiveIntegerField(
         default=0, help_text="Display order within the test"
     )

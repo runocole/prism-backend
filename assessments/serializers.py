@@ -11,10 +11,15 @@ from .models import Test, Question
 
 
 class QuestionSerializer(serializers.ModelSerializer):
+    # e.g. "/media/question_images/ab12….png" (served by the backend host)
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
-        fields = ("id", "type", "body", "payload", "points", "order_index")
+        fields = ("id", "type", "body", "payload", "points", "order_index", "image_url")
+
+    def get_image_url(self, obj):
+        return obj.image.url if obj.image else None
 
     def validate(self, data):
         # Use existing type if doing a partial update

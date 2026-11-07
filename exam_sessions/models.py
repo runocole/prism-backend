@@ -19,6 +19,9 @@ from django.utils import timezone
 class Session(models.Model):
 
     class Status(models.TextChoices):
+        # Candidate is in the waiting room: camera on, reading the terms, no
+        # questions and no timer until HR clicks "Start test" on Live.
+        WAITING = "waiting", "Waiting for HR"
         IN_PROGRESS = "in_progress", "In Progress"
         SUBMITTED = "submitted", "Submitted"
         TIMED_OUT = "timed_out", "Timed Out"
@@ -45,6 +48,12 @@ class Session(models.Model):
     answered_count = models.PositiveIntegerField(default=0)
     snapshot_path = models.CharField(max_length=500, blank=True)
     snapshot_at = models.DateTimeField(null=True, blank=True)
+    # Face check running in the candidate's browser: "on", "loading" or "failed: <reason>"
+    face_status = models.CharField(max_length=120, blank=True)
+
+    # Result email sent to the candidate after the decision ("passed" / "failed")
+    outcome_email_kind = models.CharField(max_length=10, blank=True)
+    outcome_emailed_at = models.DateTimeField(null=True, blank=True)
 
     # Reviewer's final decision (set by SubmitResultView)
     class Decision(models.TextChoices):
@@ -83,6 +92,8 @@ class Session(models.Model):
         Frontend syncs its countdown against this every 60 seconds.
         """
         duration = self.invite.test.duration_mins * 60
+        if self.status == self.Status.WAITING:
+            return duration  # the clock hasn't started yet
         return max(duration - self.elapsed_seconds, 0)
 
     @property
@@ -163,6 +174,8 @@ class Violation(models.Model):
         FACE_NOT_VISIBLE = "face_not_visible", "Face not visible"
         MULTIPLE_FACES = "multiple_faces", "More than one face"
         LOOKING_AWAY = "looking_away", "Looking away"
+        SCREENSHOT_ATTEMPT = "screenshot_attempt", "Screenshot attempt"
+        FOCUS_LOST = "focus_lost", "Left the test window"
 
     session = models.ForeignKey(
         Session, on_delete=models.CASCADE, related_name="violations"

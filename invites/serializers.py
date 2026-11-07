@@ -3,6 +3,7 @@ invites/serializers.py
 ───────────────────────
 """
 
+from django.conf import settings
 from rest_framework import serializers
 from .models import Invite
 
@@ -11,11 +12,12 @@ class InviteSerializer(serializers.ModelSerializer):
     test_title = serializers.CharField(source="test.title", read_only=True)
     test_job_role = serializers.CharField(source="test.job_role", read_only=True)
     invite_url = serializers.SerializerMethodField()
+    job_title = serializers.CharField(source="job.title", read_only=True, default=None)
 
     class Meta:
         model = Invite
         fields = (
-            "id", "test", "test_title", "test_job_role", "candidate_name",
+            "id", "test", "test_title", "test_job_role", "job", "job_title", "candidate_name",
             "candidate_email", "token", "status", "expires_at",
             "invite_url", "created_at",
         )
@@ -24,7 +26,7 @@ class InviteSerializer(serializers.ModelSerializer):
         )
 
     def get_invite_url(self, obj):
-        return f"https://screening.oticgs.com/c/{obj.token}"
+        return f"{settings.FRONTEND_URL}/c/{obj.token}"
 
 
 class SingleInviteCreateSerializer(serializers.Serializer):
@@ -34,6 +36,7 @@ class SingleInviteCreateSerializer(serializers.Serializer):
     candidate_name = serializers.CharField(max_length=255)
     candidate_email = serializers.EmailField()
     expires_at = serializers.DateTimeField(required=False)
+    job_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class BatchInviteCreateSerializer(serializers.Serializer):
@@ -49,3 +52,4 @@ class BatchInviteCreateSerializer(serializers.Serializer):
     test_id = serializers.IntegerField()
     candidates = CandidateSerializer(many=True)
     expires_at = serializers.DateTimeField(required=False)
+    job_id = serializers.IntegerField(required=False, allow_null=True)

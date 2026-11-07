@@ -49,6 +49,14 @@ class Invite(models.Model):
         max_length=20, choices=Status.choices, default=Status.PENDING
     )
     expires_at = models.DateTimeField(default=default_expiry)
+    # The job this test is for — puts the result in that job's folder on Results
+    job = models.ForeignKey(
+        "jobs.JobPost",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invites",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

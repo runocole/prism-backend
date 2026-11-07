@@ -6,6 +6,7 @@ from .views import (
     QuestionListCreateView,
     QuestionDetailView,
     ParseDocumentView,
+    QuestionImageView,
     ParseDocumentStatusView,
 )
 
@@ -15,6 +16,7 @@ urlpatterns = [
     path("<int:pk>/publish/", PublishTestView.as_view(), name="test-publish"),
     path("<int:pk>/questions/", QuestionListCreateView.as_view(), name="question-list-create"),
     path("<int:pk>/questions/<int:q_pk>/", QuestionDetailView.as_view(), name="question-detail"),
+    path("<int:pk>/questions/<int:q_pk>/image/", QuestionImageView.as_view(), name="question-image"),
     path("parse-pdf/", ParseDocumentView.as_view(), name="parse-pdf"),
     path("parse-pdf/<uuid:import_id>/", ParseDocumentStatusView.as_view(), name="parse-pdf-status"),
 ]

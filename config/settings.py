@@ -136,6 +136,17 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # For better judgement at ~25x the cost, set AI_MODEL=claude-sonnet-5-5.
 AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-5-5")
 
+# ── Live video (LiveKit — the same server Workforce's video rooms use) ──────
+# Put these in /etc/pas-backend/secrets.env. Without them the Live page falls
+# back to snapshots and HR can't talk to candidates.
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")          # e.g. wss://live.example.com
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+
+# Recordings and webcam snapshots are stored here, NOT under MEDIA_ROOT
+# (MEDIA_ROOT is publicly served by the web server).
+PRIVATE_MEDIA_ROOT = Path(os.environ.get("PRIVATE_MEDIA_ROOT", BASE_DIR / "private_media"))
+
 # Minimum AI CV score (0–100) to be screened in.
 CV_PASS_SCORE = int(os.environ.get("CV_PASS_SCORE", 50))
 

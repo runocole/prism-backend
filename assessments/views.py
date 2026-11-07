@@ -196,6 +196,52 @@ class QuestionDetailView(APIView):
         return success("Question deleted.")
 
 
+class QuestionImageView(APIView):
+    """
+    POST   /api/v1/assessments/<id>/questions/<q_id>/image/  (multipart: image=<png/jpg/webp/gif>)
+    DELETE /api/v1/assessments/<id>/questions/<q_id>/image/
+    A diagram / picture shown to candidates under the question (draft tests only).
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    ALLOWED = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    MAX_BYTES = 5 * 1024 * 1024
+
+    def _question(self, pk, q_pk):
+        return Question.objects.filter(pk=q_pk, test__pk=pk, test__status=Test.Status.DRAFT).first()
+
+    def post(self, request, pk, q_pk):
+        question = self._question(pk, q_pk)
+        if not question:
+            return Response({"success": False, "error": "Question not found (only draft tests can be changed)."}, status=404)
+        image = request.FILES.get("image")
+        if not image or not image.name.lower().endswith(self.ALLOWED):
+            return Response({"success": False, "error": "Upload a PNG, JPG, WEBP or GIF image."}, status=400)
+        if image.size > self.MAX_BYTES:
+            return Response({"success": False, "error": "Image is too large (max 5 MB)."}, status=400)
+        try:
+            from PIL import Image
+            Image.open(image).verify()  # rejects files that aren't really images
+            image.seek(0)
+        except Exception:
+            return Response({"success": False, "error": "That file isn't a valid image."}, status=400)
+        if question.image:
+            question.image.delete(save=False)
+        question.image = image
+        question.save(update_fields=["image"])
+        return success(QuestionSerializer(question).data)
+
+    def delete(self, request, pk, q_pk):
+        question = self._question(pk, q_pk)
+        if not question:
+            return Response({"success": False, "error": "Question not found."}, status=404)
+        if question.image:
+            question.image.delete(save=False)
+            question.save(update_fields=["image"])
+        return success(QuestionSerializer(question).data)
+
+
 class ParseDocumentView(APIView):
     """
     POST /api/v1/assessments/parse-pdf/

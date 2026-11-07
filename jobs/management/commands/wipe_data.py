@@ -25,7 +25,7 @@ from invites.models import Invite
 from jobs.models import Application, Blacklist, CvImport, JobLink, JobPost
 from users.models import User
 
-MEDIA_DIRS = ["applications", "recordings", "imports", "snapshots"]
+MEDIA_DIRS = ["applications", "recordings", "imports", "snapshots", "question_images"]
 
 
 class Command(BaseCommand):
@@ -49,7 +49,8 @@ class Command(BaseCommand):
             "Violations": Violation.objects.count(),
         }
         media_root = Path(settings.MEDIA_ROOT)
-        dirs = [media_root / d for d in MEDIA_DIRS if (media_root / d).exists()]
+        roots = [media_root, Path(settings.PRIVATE_MEDIA_ROOT)]
+        dirs = [root / d for root in roots for d in MEDIA_DIRS if (root / d).exists()]
 
         self.stdout.write("Will DELETE:")
         for name, n in counts.items():

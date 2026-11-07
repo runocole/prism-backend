@@ -658,6 +658,7 @@ class BatchEmailView(APIView):
                 candidate_email=app.email,
                 created_by=request.user,
                 expires_at=expires_at,
+                job=job,
             )
             pairs.append((invite.id, app.id))
 

@@ -19,6 +19,11 @@ from .views import (
     SnapshotUploadView,
     LiveSessionsView,
     SnapshotView,
+    LiveTokenView,
+    StartTestView,
+    HrLiveTokenView,
+    RecordingStreamView,
+    OutcomeEmailView,
 )
 
 urlpatterns = [
@@ -31,10 +36,15 @@ urlpatterns = [
     path("<int:pk>/violations/", LogViolationView.as_view(), name="session-violations"),
     path("<int:pk>/recording/", UploadRecordingChunkView.as_view(), name="session-recording"),
     path("<int:pk>/heartbeat/", SnapshotUploadView.as_view(), name="session-heartbeat"),
+    path("<int:pk>/live-token/", LiveTokenView.as_view(), name="session-live-token"),
 
     # ── HR / Reviewer (Bearer JWT) ────────────────────────────────────────────
     path("", SessionListView.as_view(), name="session-list"),
     path("live/", LiveSessionsView.as_view(), name="session-live"),
+    path("outcome-emails/", OutcomeEmailView.as_view(), name="session-outcome-emails"),
+    path("<int:pk>/start-test/", StartTestView.as_view(), name="session-start-test"),
+    path("<int:pk>/live-token/hr/", HrLiveTokenView.as_view(), name="session-live-token-hr"),
+    path("<int:pk>/recording/stream/", RecordingStreamView.as_view(), name="session-recording-stream"),
     path("<int:pk>/snapshot/", SnapshotView.as_view(), name="session-snapshot"),
     path("<int:pk>/", SessionDetailView.as_view(), name="session-detail"),
     path("<int:pk>/recording-url/", RecordingURLView.as_view(), name="session-recording-url"),

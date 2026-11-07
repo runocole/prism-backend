@@ -130,7 +130,7 @@ def validate_questions(questions) -> list:
 
         q = {
             "id": qid, "text": text, "type": qtype, "options": options,
-            "required": bool(raw.get("required", True)),
+            "required": True,  # every question is compulsory
             "show_if": None,
         }
 

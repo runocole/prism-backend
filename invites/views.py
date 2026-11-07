@@ -43,7 +43,7 @@ def default_expiry():
     return timezone.now() + timedelta(hours=hours)
 
 
-def get_or_refresh_invite(test, name, email, expires_at, user):
+def get_or_refresh_invite(test, name, email, expires_at, user, job=None):
     """
     Sending a test again to the same person re-sends their EXISTING link
     (with the new expiry) instead of cancelling it, so every email they
@@ -61,12 +61,19 @@ def get_or_refresh_invite(test, name, email, expires_at, user):
     if existing:
         existing.candidate_name = name
         existing.expires_at = max(existing.expires_at, expires_at)
-        existing.save(update_fields=["candidate_name", "expires_at"])
+        if job is not None:
+            existing.job = job
+        existing.save(update_fields=["candidate_name", "expires_at", "job"])
         return existing
     return Invite.objects.create(
         test=test, candidate_name=name, candidate_email=email,
-        expires_at=expires_at, created_by=user,
+        expires_at=expires_at, created_by=user, job=job,
     )
+
+
+def _job_from(d):
+    from jobs.models import JobPost
+    return JobPost.objects.filter(pk=d.get("job_id")).first() if d.get("job_id") else None
 
 
 class InviteListCreateView(APIView):
@@ -103,7 +110,7 @@ class InviteListCreateView(APIView):
 
         invite = get_or_refresh_invite(
             test, d["candidate_name"], d["candidate_email"],
-            d.get("expires_at") or default_expiry(), request.user,
+            d.get("expires_at") or default_expiry(), request.user, job=_job_from(d),
         )
 
         run_in_background(send_invite_emails, [invite.id])
@@ -137,10 +144,11 @@ class BatchInviteCreateView(APIView):
         expires_at = d.get("expires_at")
         created_invites = []
 
+        job = _job_from(d)
         for candidate in d["candidates"]:
             invite = get_or_refresh_invite(
                 test, candidate["name"], candidate["email"],
-                expires_at or default_expiry(), request.user,
+                expires_at or default_expiry(), request.user, job=job,
             )
             created_invites.append(invite)
 

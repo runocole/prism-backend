@@ -20,12 +20,14 @@ HR / Reviewer endpoints (JWT required):
 
 from datetime import timedelta
 
-from django.http import HttpResponse
+from django.core import signing
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.conf import settings
 
 from assessments.models import Question
 from assessments.serializers import QuestionSerializer
@@ -39,7 +41,10 @@ from .serializers import (
     ReviewScoreSerializer,
 )
 from .services import submit_session
-from .storage import upload_file, generate_signed_url, read_file
+from . import livekit
+from .emails import send_outcome_emails
+from .storage import upload_file, read_file, recording_chunk_keys, iter_recording
+from config.background import run_in_background
 
 
 def success(data, code=status.HTTP_200_OK):
@@ -71,15 +76,17 @@ class StartSessionView(APIView):
             return success({
                 "session_id": session.id,
                 "remaining_seconds": session.remaining_seconds,
+                "status": session.status,
             })
 
-        # Mark invite active and create session
+        # Mark invite active and put the candidate in the waiting room:
+        # camera on, terms on screen, no questions / timer until HR starts them.
         invite.status = Invite.Status.ACTIVE
         invite.save(update_fields=["status"])
-        session = Session.objects.create(invite=invite)
+        session = Session.objects.create(invite=invite, status=Session.Status.WAITING)
 
         return success(
-            {"session_id": session.id, "remaining_seconds": session.remaining_seconds},
+            {"session_id": session.id, "remaining_seconds": session.remaining_seconds, "status": session.status},
             status.HTTP_201_CREATED,
         )
 
@@ -93,14 +100,16 @@ class SessionQuestionsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, pk):
-        try:
-            session = Session.objects.get(
-                pk=pk, invite=request.auth, status=Session.Status.IN_PROGRESS
-            )
-        except Session.DoesNotExist:
+        session = Session.objects.filter(pk=pk, invite=request.auth).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        if session.status == Session.Status.WAITING:
             return Response(
-                {"success": False, "error": "Session not found."}, status=404
+                {"success": False, "code": "waiting", "error": "Your test hasn't been started yet."},
+                status=409,
             )
+        if session.status != Session.Status.IN_PROGRESS:
+            return Response({"success": False, "error": "This test is no longer active."}, status=410)
 
         questions = session.invite.test.questions.all()
         data = []
@@ -204,6 +213,8 @@ class SubmitSessionView(APIView):
 
         if session.status == Session.Status.SUBMITTED:
             return success("Already submitted.")
+        if session.status == Session.Status.WAITING:
+            return Response({"success": False, "error": "Your test hasn't been started yet."}, status=409)
 
         submit_session(session)
         return success("Test submitted successfully.")
@@ -267,8 +278,10 @@ class UploadRecordingChunkView(APIView):
 
 class SnapshotUploadView(APIView):
     """
-    Candidate heartbeat for the live monitor, sent every ~10 seconds:
-    a small webcam JPEG (optional) + how many questions are answered so far.
+    Candidate heartbeat for the live monitor, sent every ~5 seconds (also in
+    the waiting room): a small webcam JPEG (optional), how many questions are
+    answered, and whether the face check is running. The reply tells the
+    waiting room when HR has started the test.
     Only the latest snapshot is kept: snapshots/<session_id>/latest.jpg
     """
     authentication_classes = [InviteTokenAuthentication]
@@ -280,12 +293,17 @@ class SnapshotUploadView(APIView):
         session = Session.objects.filter(pk=pk, invite=request.auth).first()
         if not session:
             return Response({"success": False, "error": "Session not found."}, status=404)
-        if session.status != Session.Status.IN_PROGRESS:
-            return success({"status": session.status})
+        if session.status not in (Session.Status.IN_PROGRESS, Session.Status.WAITING):
+            return success({"status": session.status, "remaining_seconds": 0})
 
         now = timezone.now()
         session.last_seen_at = now
         fields = ["last_seen_at"]
+
+        face = str(request.data.get("face") or "")[:120]
+        if face and face != session.face_status:
+            session.face_status = face
+            fields.append("face_status")
 
         try:
             answered = int(request.data.get("answered", session.answered_count))
@@ -303,7 +321,30 @@ class SnapshotUploadView(APIView):
             fields += ["snapshot_path", "snapshot_at"]
 
         session.save(update_fields=fields)
-        return success({"status": session.status})
+        return success({"status": session.status, "remaining_seconds": session.remaining_seconds})
+
+
+class LiveTokenView(APIView):
+    """
+    Candidate: a LiveKit token for their own private room (camera + mic out,
+    HR's voice in). Works in the waiting room and during the test.
+    """
+    authentication_classes = [InviteTokenAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        session = Session.objects.filter(pk=pk, invite=request.auth).first()
+        if not session or session.status not in (Session.Status.WAITING, Session.Status.IN_PROGRESS):
+            return Response({"success": False, "error": "Session not active."}, status=404)
+        if not livekit.is_configured():
+            return success({"enabled": False})
+        room = livekit.room_name(session.id)
+        return success({
+            "enabled": True,
+            "url": settings.LIVEKIT_URL,
+            "room": room,
+            "token": livekit.make_token(f"candidate-{session.id}", session.invite.candidate_name, room),
+        })
 
 
 # ─── HR / Reviewer Views ──────────────────────────────────────────────────────
@@ -316,14 +357,14 @@ class LiveSessionsView(APIView):
 
     def get(self, request):
         sessions = (
-            Session.objects.filter(status=Session.Status.IN_PROGRESS)
+            Session.objects.filter(status__in=[Session.Status.WAITING, Session.Status.IN_PROGRESS])
             .select_related("invite__test")
-            .order_by("started_at")
+            .order_by("status", "started_at")
         )
         now = timezone.now()
         data = []
         for s in sessions:
-            if s.is_expired:
+            if s.status == Session.Status.IN_PROGRESS and s.is_expired:
                 continue
             recent = list(s.violations.order_by("-occurred_at")[:5])
             data.append({
@@ -343,8 +384,46 @@ class LiveSessionsView(APIView):
                 "last_seen_at": s.last_seen_at,
                 "online": bool(s.last_seen_at and now - s.last_seen_at < self.ONLINE_WINDOW),
                 "snapshot_at": s.snapshot_at,
+                "status": s.status,
+                "face_status": s.face_status,
+                "duration_mins": s.invite.test.duration_mins,
             })
-        return success(data)
+        return success({"sessions": data, "live_video": livekit.is_configured()})
+
+
+class StartTestView(APIView):
+    """Staff: start a waiting candidate's test (shows questions, starts the clock)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        session = Session.objects.filter(pk=pk).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        if session.status != Session.Status.WAITING:
+            return Response({"success": False, "error": "This candidate's test has already started."}, status=400)
+        session.status = Session.Status.IN_PROGRESS
+        session.started_at = timezone.now()
+        session.save(update_fields=["status", "started_at"])
+        return success({"status": session.status, "remaining_seconds": session.remaining_seconds})
+
+
+class HrLiveTokenView(APIView):
+    """Staff: a LiveKit token to watch / listen to / talk to one candidate."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        session = Session.objects.filter(pk=pk).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        if not livekit.is_configured():
+            return success({"enabled": False})
+        room = livekit.room_name(session.id)
+        return success({
+            "enabled": True,
+            "url": settings.LIVEKIT_URL,
+            "room": room,
+            "token": livekit.make_token(f"hr-{request.user.id}", request.user.full_name, room),
+        })
 
 
 class SnapshotView(APIView):
@@ -371,8 +450,13 @@ class SessionListView(APIView):
 
     def get(self, request):
         sessions = Session.objects.select_related(
-            "invite__test", "invite", "reviewed_by"
+            "invite__test", "invite", "invite__job", "reviewed_by"
         ).order_by("-started_at")
+        job = request.query_params.get("job")
+        if job == "none":
+            sessions = sessions.filter(invite__job__isnull=True)
+        elif job:
+            sessions = sessions.filter(invite__job_id=job)
 
         data = [
             {
@@ -388,6 +472,11 @@ class SessionListView(APIView):
                 "score_pct": s.score_pct,
                 "reviewed_at": s.reviewed_at,
                 "graded_by_name": s.graded_by_name,
+                "job_id": s.invite.job_id,
+                "job_title": s.invite.job.title if s.invite.job_id else None,
+                "decision_notes": s.decision_notes,
+                "outcome_email_kind": s.outcome_email_kind,
+                "outcome_emailed_at": s.outcome_emailed_at,
             }
             for s in sessions
         ]
@@ -411,32 +500,86 @@ class SessionDetailView(APIView):
 
 
 class RecordingURLView(APIView):
-    """HR: get URL to stream the session recording chunks."""
+    """
+    Staff: a short-lived link to the WHOLE recording (all 30-second pieces
+    joined). The link is signed, so it works in a <video> tag without the
+    login header, expires after an hour, and recordings are never public.
+    """
     permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
-        import os
-        from django.conf import settings as django_settings
-        try:
-            session = Session.objects.get(
-                pk=pk
-            )
-        except Session.DoesNotExist:
-            return Response(
-                {"success": False, "error": "Session not found."}, status=404
-            )
-        recording_dir = os.path.join(django_settings.MEDIA_ROOT, "recordings", str(pk))
-        if not os.path.exists(recording_dir):
-            return Response(
-                {"success": False, "error": "No recording available yet."}, status=404
-            )
-        chunks = sorted([f for f in os.listdir(recording_dir) if f.endswith(".webm")])
+        if not Session.objects.filter(pk=pk).exists():
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        chunks = recording_chunk_keys(pk)
         if not chunks:
-            return Response(
-                {"success": False, "error": "No recording chunks found."}, status=404
-            )
-        base_url = request.build_absolute_uri("/")
-        chunk_url = f"{base_url}media/recordings/{pk}/{chunks[0]}"
-        return success({"url": chunk_url, "expires_in_seconds": 3600})
+            return Response({"success": False, "error": "No recording available yet."}, status=404)
+        sig = signing.TimestampSigner(salt="recording").sign(str(pk))
+        return success({
+            "path": f"/api/v1/sessions/{pk}/recording/stream/?sig={sig}",
+            "chunks": len(chunks),
+            "approx_seconds": len(chunks) * 30,
+            "expires_in_seconds": 3600,
+        })
+
+
+class RecordingStreamView(APIView):
+    """The joined recording (video/webm), for a valid signed link only."""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, pk):
+        try:
+            value = signing.TimestampSigner(salt="recording").unsign(request.query_params.get("sig", ""), max_age=3600)
+        except signing.BadSignature:
+            return Response({"success": False, "error": "This recording link has expired. Reopen the result."}, status=403)
+        if value != str(pk) or not recording_chunk_keys(pk):
+            return Response({"success": False, "error": "Recording not found."}, status=404)
+        response = StreamingHttpResponse(iter_recording(pk), content_type="video/webm")
+        response["Cache-Control"] = "private, no-store"
+        response["Content-Disposition"] = f'inline; filename="session-{pk}.webm"'
+        return response
+
+
+class OutcomeEmailView(APIView):
+    """
+    Staff: email results.
+    POST /api/v1/sessions/outcome-emails/
+      {
+        "passed": [{"session_id": 5, "date": "Mon 10 Nov", "time": "10:00 AM"}],
+        "address": "...", "notes": "...",
+        "failed": [6, 7], "include_remarks": true
+      }
+    Only sessions with a matching decision are emailed. Sent in the background.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        passed_in = request.data.get("passed") or []
+        failed_in = request.data.get("failed") or []
+        address = str(request.data.get("address") or "").strip()
+        notes = str(request.data.get("notes") or "")[:3000]
+
+        passed = []
+        for p in passed_in:
+            try:
+                sid = int(p.get("session_id"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            date, time_ = str(p.get("date") or "").strip(), str(p.get("time") or "").strip()
+            if not (date and time_):
+                return Response({"success": False, "error": "Every passed candidate needs a date and time."}, status=400)
+            passed.append({"session_id": sid, "date": date[:100], "time": time_[:50]})
+        if passed and not address:
+            return Response({"success": False, "error": "Enter the address for the next stage."}, status=400)
+
+        ok_passed = set(Session.objects.filter(pk__in=[p["session_id"] for p in passed], decision="pass").values_list("id", flat=True))
+        ok_failed = list(Session.objects.filter(pk__in=[int(i) for i in failed_in if str(i).isdigit()], decision="fail").values_list("id", flat=True))
+        passed = [p for p in passed if p["session_id"] in ok_passed]
+        if not passed and not ok_failed:
+            return Response({"success": False, "error": "No candidates to email."}, status=400)
+
+        run_in_background(send_outcome_emails, passed, ok_failed, address, notes, bool(request.data.get("include_remarks", True)))
+        return success({"passed": len(passed), "failed": len(ok_failed)}, status.HTTP_202_ACCEPTED)
 
 
 class ReviewAnswerView(APIView):
