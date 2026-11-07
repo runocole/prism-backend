@@ -246,9 +246,18 @@ class LogViolationView(APIView):
         serializer = ViolationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        def number(name, cast):
+            try:
+                value = request.data.get(name)
+                return cast(value) if value not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
         violation = Violation.objects.create(
             session=session,
             type=serializer.validated_data["type"],
+            video_offset_seconds=number("video_offset", float),
+            recording_part=number("part", int),
         )
         return success({"violation_id": violation.id}, status.HTTP_201_CREATED)
 
@@ -277,7 +286,14 @@ class UploadRecordingChunkView(APIView):
                 {"success": False, "error": "No chunk file provided."}, status=400
             )
 
-        object_key = f"recordings/{session.id}/chunk_{int(chunk_index):04d}.webm"
+        try:
+            part = int(request.data.get("part") or 0)
+        except (TypeError, ValueError):
+            part = 0
+        if part > 0:  # one part per page load; a refresh never overwrites earlier video
+            object_key = f"recordings/{session.id}/chunk_{part:013d}_{int(chunk_index):05d}.webm"
+        else:
+            object_key = f"recordings/{session.id}/chunk_{int(chunk_index):04d}.webm"
         upload_file(chunk, object_key, content_type="video/webm")
 
         return success({"chunk_index": chunk_index, "key": object_key}, status.HTTP_201_CREATED)
@@ -484,6 +500,7 @@ class SessionListView(APIView):
                 "decision_notes": s.decision_notes,
                 "outcome_email_kind": s.outcome_email_kind,
                 "outcome_emailed_at": s.outcome_emailed_at,
+                "attendance_confirmed_at": s.attendance_confirmed_at,
             }
             for s in sessions
         ]
@@ -595,6 +612,60 @@ class RecordingStreamView(APIView):
         response["Content-Length"] = str(len(data))
         response["Cache-Control"] = "private, max-age=3600"
         return response
+
+
+class ConfirmAttendanceView(APIView):
+    """
+    Public (from the "Confirm your attendance" button in the next-stage email).
+    POST {"token": "..."} — records the confirmation once and emails HR.
+    POST, not GET, so email link-scanners can't confirm by accident.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        from config.emails import hr_address
+        from django.core.mail import EmailMessage
+        try:
+            session_id = int(signing.TimestampSigner(salt="attendance").unsign(
+                str(request.data.get("token") or ""), max_age=60 * 60 * 24 * 60))
+        except (signing.BadSignature, ValueError):
+            return Response({"success": False, "error": "This confirmation link isn't valid."}, status=404)
+        session = Session.objects.select_related("invite__test", "invite__job").filter(pk=session_id).first()
+        if not session:
+            return Response({"success": False, "error": "This confirmation link isn't valid."}, status=404)
+
+        invite = session.invite
+        role = invite.job.title if invite.job_id else (invite.test.job_role or invite.test.title)
+        details = session.interview_details or {}
+        already = session.attendance_confirmed_at is not None
+        if not already:
+            session.attendance_confirmed_at = timezone.now()
+            session.save(update_fields=["attendance_confirmed_at"])
+            try:
+                EmailMessage(
+                    f"Attendance confirmed: {invite.candidate_name} – {role}",
+                    (
+                        f"{invite.candidate_name} ({invite.candidate_email}) has confirmed they will attend "
+                        f"the next stage for {role}.\n\n"
+                        f"Date: {details.get('date', '-')}\nTime: {details.get('time', '-')}\n"
+                        f"Address: {details.get('address', '-')}\n\n"
+                        f"Confirmed at {timezone.localtime(session.attendance_confirmed_at).strftime('%d %b %Y, %I:%M %p')}."
+                    ),
+                    settings.DEFAULT_FROM_EMAIL,
+                    [hr_address()],
+                ).send()
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Attendance email to HR failed for session %s", session.id)
+        return success({
+            "name": invite.candidate_name.split(" ")[0] if invite.candidate_name else "",
+            "role": role,
+            "date": details.get("date", ""),
+            "time": details.get("time", ""),
+            "address": details.get("address", ""),
+            "already": already,
+        })
 
 
 class OutcomeEmailView(APIView):

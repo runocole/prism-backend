@@ -54,6 +54,9 @@ class Session(models.Model):
     # Result email sent to the candidate after the decision ("passed" / "failed")
     outcome_email_kind = models.CharField(max_length=10, blank=True)
     outcome_emailed_at = models.DateTimeField(null=True, blank=True)
+    # Next-stage details sent to a passed candidate, and their confirmation
+    interview_details = models.JSONField(default=dict, blank=True)
+    attendance_confirmed_at = models.DateTimeField(null=True, blank=True)
 
     # Reviewer's final decision (set by SubmitResultView)
     class Decision(models.TextChoices):
@@ -182,6 +185,10 @@ class Violation(models.Model):
     )
     type = models.CharField(max_length=30, choices=Type.choices)
     occurred_at = models.DateTimeField(default=timezone.now)
+    # Where in the recording this happened: seconds from the start of the
+    # recording part (a part = one page load; usually just one per session)
+    video_offset_seconds = models.FloatField(null=True, blank=True)
+    recording_part = models.BigIntegerField(null=True, blank=True)
 
     # Optional snapshot image taken at moment of violation
     snapshot_path = models.CharField(max_length=500, blank=True)

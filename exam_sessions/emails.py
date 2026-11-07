@@ -5,19 +5,19 @@ Result emails after the reviewer's decision (Results → "Email candidates"),
 in the branded design (config/emails.py):
 
   passed → "Congratulations" + next-stage details (date, time, address, what to
-           bring) + a "Confirm attendance" button (opens a reply to HR)
+           bring) + a "Confirm attendance" button (one click; HR is emailed)
   failed → a polite, generic message (reviewer remarks are never included)
 
 Called from a background thread.
 """
 
 import logging
-from urllib.parse import quote
+
 
 from django.conf import settings
 from django.utils import timezone
 
-from config.emails import hr_address, send_branded
+from config.emails import send_branded
 
 from .models import Session
 
@@ -36,10 +36,14 @@ def _first_name(session: Session) -> str:
 
 
 def send_passed(session: Session, date: str, time: str, address: str, notes: str) -> bool:
+    from django.core import signing
     role = _role(session)
-    name = session.invite.candidate_name
-    subject = quote(f"Confirming attendance – {name} – {role}")
-    body = quote(f"Hello,\n\nI confirm I will attend on {date} at {time}.\n\nKind regards,\n{name}")
+    Session.objects.filter(pk=session.pk).update(
+        interview_details={"date": date, "time": time, "address": address, "notes": notes},
+        attendance_confirmed_at=None,
+    )
+    token = signing.TimestampSigner(salt="attendance").sign(str(session.pk))
+    confirm_url = f"{settings.FRONTEND_URL}/confirm/{token}"
     details = [("Position", role), ("Date", date), ("Time", time), ("Address", address)]
     if notes.strip():
         details.append(("Please bring / note", notes.strip()))
@@ -55,7 +59,7 @@ def send_passed(session: Session, date: str, time: str, address: str, notes: str
         ],
         details=details,
         details_title="Your interview details",
-        button=("Confirm your attendance", f"mailto:{hr_address()}?subject={subject}&body={body}"),
+        button=("Confirm your attendance", confirm_url),
         after=["We look forward to meeting you. If you can't make this time, please reply to this email."],
         stage=3,
     )

@@ -148,7 +148,6 @@ def assemble_recording(session_id: int) -> str | None:
     if settings.STORAGE_ENDPOINT_URL:
         return None
     keys = recording_chunk_keys(session_id)
-    keys = [k for k in keys if not k.endswith("/full.webm")]
     if not keys:
         return None
     out = full_recording_path(session_id)
@@ -156,12 +155,42 @@ def assemble_recording(session_id: int) -> str | None:
     if os.path.exists(out) and os.path.getmtime(out) >= newest:
         return out
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    ffmpeg = shutil.which("ffmpeg")
+    parts = recording_parts(session_id)
+
+    # Several parts (the page was refreshed): join each part, then stitch with ffmpeg
+    if len(parts) > 1 and ffmpeg:
+        import subprocess
+        part_files = []
+        for i, (_, part_keys) in enumerate(parts):
+            pf = f"{out}.part{i}.webm"
+            with open(pf, "wb") as dst:
+                for k in part_keys:
+                    with open(_local_path(k), "rb") as src:
+                        shutil.copyfileobj(src, dst, 1024 * 1024)
+            part_files.append(pf)
+        listing = out + ".list.txt"
+        with open(listing, "w") as f:
+            f.writelines(f"file '{pf}'\n" for pf in part_files)
+        fixed = out + ".fixed.webm"
+        result = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", fixed],
+            capture_output=True, timeout=900,
+        )
+        for pf in part_files + [listing]:
+            if os.path.exists(pf):
+                os.remove(pf)
+        if result.returncode == 0 and os.path.exists(fixed) and os.path.getsize(fixed) > 0:
+            os.replace(fixed, out)
+            return out
+        if os.path.exists(fixed):
+            os.remove(fixed)
+
     joined = out + ".joined"
     with open(joined, "wb") as dst:
         for k in keys:
             with open(_local_path(k), "rb") as src:
                 shutil.copyfileobj(src, dst, 1024 * 1024)
-    ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
         import subprocess
         fixed = out + ".fixed.webm"
@@ -177,3 +206,31 @@ def assemble_recording(session_id: int) -> str | None:
             os.remove(fixed)
     os.replace(joined, out)
     return out
+
+
+
+# ── Recording parts ──────────────────────────────────────────────────────────
+# Chunk names: chunk_<part>_<index>.webm, where <part> is the moment that page
+# load started recording (13-digit ms). A page refresh starts a new part, so
+# earlier video is never overwritten. Old names chunk_<index>.webm = part 0.
+
+def _part_of(key: str) -> int:
+    name = key.rsplit("/", 1)[-1][len("chunk_"):-len(".webm")]
+    return int(name.split("_")[0]) if "_" in name else 0
+
+
+def recording_parts(session_id: int) -> list[tuple[int, list[str]]]:
+    """[(part, [chunk keys in order]), ...] in recording order."""
+    parts: dict[int, list[str]] = {}
+    for key in recording_chunk_keys(session_id):
+        parts.setdefault(_part_of(key), []).append(key)
+    return [(p, sorted(keys)) for p, keys in sorted(parts.items())]
+
+
+def part_start_seconds(session_id: int) -> dict[int, float]:
+    """Where each part starts in the joined recording (each chunk is ~30 s)."""
+    starts, t = {}, 0.0
+    for part, keys in recording_parts(session_id):
+        starts[part] = t
+        t += 30.0 * len(keys)
+    return starts

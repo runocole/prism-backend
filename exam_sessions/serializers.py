@@ -11,7 +11,7 @@ class ViolationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Violation
-        fields = ("id", "type", "occurred_at", "snapshot_path")
+        fields = ("id", "type", "occurred_at", "snapshot_path", "video_offset_seconds", "recording_part")
         read_only_fields = ("id", "occurred_at")
 
 
@@ -58,8 +58,20 @@ class SessionSerializer(serializers.ModelSerializer):
             "status", "started_at", "submitted_at", "remaining_seconds",
             "recording_path", "violation_count", "answers", "violations",
             "decision", "decision_notes", "score_pct", "reviewed_by_email", "reviewed_at",
-            "graded_by_name",
+            "graded_by_name", "attendance_confirmed_at",
         )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Seconds into the full recording for each violation (click → jump the video there)
+        from .storage import part_start_seconds
+        starts = part_start_seconds(instance.id)
+        first_part = min(starts) if starts else 0
+        for v in data["violations"]:
+            offset = v.get("video_offset_seconds")
+            part = v.get("recording_part") or first_part
+            v["video_seconds"] = round(starts.get(part, 0.0) + offset, 1) if offset is not None else None
+        return data
 
 
 class SaveDraftSerializer(serializers.Serializer):
