@@ -645,7 +645,11 @@ class BatchEmailView(APIView):
         except Test.DoesNotExist:
             return Response({"success": False, "error": "Test not found."}, status=404)
 
-        screened_in = list(job.applications.filter(status=Application.Status.SCREENED_IN))
+        screened_in = job.applications.filter(status=Application.Status.SCREENED_IN)
+        chosen = request.data.get("application_ids")
+        if chosen:  # send to these people only (e.g. batch A at 8:00, batch B at 9:30)
+            screened_in = screened_in.filter(id__in=[int(i) for i in chosen if str(i).isdigit()])
+        screened_in = list(screened_in)
         if not screened_in:
             return Response(
                 {"success": False, "error": "No screened-in candidates to email."},
