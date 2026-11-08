@@ -57,7 +57,8 @@ class BatchInviteCreateSerializer(serializers.Serializer):
         email = serializers.EmailField()
 
     test_id = serializers.IntegerField()
-    candidates = CandidateSerializer(many=True)
+    # Checked one by one in the view, so one bad line doesn't fail the batch
+    candidates = serializers.ListField(child=serializers.DictField(), allow_empty=False)
     expires_at = serializers.DateTimeField(required=False)
     opens_at = serializers.DateTimeField(required=False, allow_null=True)
     job_id = serializers.IntegerField(required=False, allow_null=True)

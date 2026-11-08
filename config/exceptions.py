@@ -21,14 +21,7 @@ def custom_exception_handler(exc, context):
     error_detail = response.data
 
     # Flatten DRF's nested error structure into one clean message
-    if isinstance(error_detail, dict):
-        first_key = next(iter(error_detail))
-        first_val = error_detail[first_key]
-        message = first_val[0] if isinstance(first_val, list) else str(first_val)
-    elif isinstance(error_detail, list):
-        message = str(error_detail[0])
-    else:
-        message = str(error_detail)
+    message = _first_message(error_detail) or "Something went wrong."
 
     response.data = {
         "success": False,
@@ -37,3 +30,23 @@ def custom_exception_handler(exc, context):
     }
 
     return response
+
+
+def _first_message(detail, field=""):
+    """First readable message in DRF's nested errors, e.g. 'email: Enter a valid email address.'"""
+    if isinstance(detail, dict):
+        for key, value in detail.items():
+            found = _first_message(value, key if key != "non_field_errors" else field)
+            if found:
+                return found
+        return ""
+    if isinstance(detail, list):
+        for value in detail:
+            found = _first_message(value, field)
+            if found:
+                return found
+        return ""
+    text = str(detail)
+    if not text:
+        return ""
+    return f"{field}: {text}" if field and field not in ("detail",) else text

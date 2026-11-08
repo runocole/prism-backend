@@ -142,23 +142,54 @@ class BatchInviteCreateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        from django.core.exceptions import ValidationError
+        from django.core.validators import validate_email
+
         expires_at = d.get("expires_at")
-        created_invites = []
+        created_invites, skipped, seen = [], [], set()
 
         job = _job_from(d)
         for candidate in d["candidates"]:
-            invite = get_or_refresh_invite(
-                test, candidate["name"], candidate["email"],
-                expires_at or default_expiry(), request.user, job=job,
-                opens_at=d.get("opens_at"),
-            )
+            name = str(candidate.get("name") or "").strip()[:255]
+            email = str(candidate.get("email") or "").strip().strip(".,;<>()").lower()
+            label = f"{name}, {email}".strip(", ")
+            try:
+                validate_email(email)
+            except ValidationError:
+                skipped.append({"line": label, "reason": "not a valid email address"})
+                continue
+            if not name:
+                skipped.append({"line": label, "reason": "missing name"})
+                continue
+            if email in seen:
+                continue  # same person twice in the list
+            seen.add(email)
+            try:
+                invite = get_or_refresh_invite(
+                    test, name, email,
+                    expires_at or default_expiry(), request.user, job=job,
+                    opens_at=d.get("opens_at"),
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Batch invite failed for %s", email)
+                skipped.append({"line": label, "reason": "couldn't be saved"})
+                continue
             created_invites.append(invite)
+
+        if not created_invites:
+            first = skipped[0] if skipped else {"line": "", "reason": "no candidates"}
+            return Response(
+                {"success": False, "error": f"Nothing sent. \"{first['line']}\": {first['reason']}.", "skipped": skipped},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         run_in_background(send_invite_emails, [i.id for i in created_invites])
 
         return success(
             {
                 "created": len(created_invites),
+                "skipped": skipped,
                 "invites": InviteSerializer(
                     created_invites, many=True, context={"request": request}
                 ).data,
