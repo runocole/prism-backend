@@ -169,7 +169,7 @@ class Violation(models.Model):
     """
 
     class Type(models.TextChoices):
-        TAB_SWITCH = "tab_switch", "Tab Switch"
+        TAB_SWITCH = "tab_switch", "Switched tab"
         COPY = "copy", "Copy Attempt"
         PASTE = "paste", "Paste Attempt"
         CUT = "cut", "Cut Attempt"
@@ -180,7 +180,7 @@ class Violation(models.Model):
         MULTIPLE_FACES = "multiple_faces", "More than one face"
         LOOKING_AWAY = "looking_away", "Looking away"
         SCREENSHOT_ATTEMPT = "screenshot_attempt", "Screenshot attempt"
-        FOCUS_LOST = "focus_lost", "Left the test window"
+        FOCUS_LOST = "focus_lost", "Switched to another window or app"
 
     session = models.ForeignKey(
         Session, on_delete=models.CASCADE, related_name="violations"

@@ -9,9 +9,11 @@ from .models import Session, Answer, Violation
 
 class ViolationSerializer(serializers.ModelSerializer):
 
+    type_label = serializers.CharField(source="get_type_display", read_only=True)
+
     class Meta:
         model = Violation
-        fields = ("id", "type", "occurred_at", "snapshot_path", "video_offset_seconds", "recording_part")
+        fields = ("id", "type", "type_label", "occurred_at", "snapshot_path", "video_offset_seconds", "recording_part")
         read_only_fields = ("id", "occurred_at")
 
 
