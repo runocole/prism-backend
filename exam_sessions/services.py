@@ -67,3 +67,24 @@ def submit_session(session: Session):
 
     # Run MCQ auto-scoring
     score_session(session)
+
+def session_score_pct(session: Session) -> float:
+    total_points = session.invite.test.total_points
+    earned = sum((a.auto_score or 0) + (a.manual_score or 0) for a in session.answers.all())
+    return round((earned / total_points * 100), 1) if total_points else 0
+
+
+def rescore_question(question) -> int:
+    """
+    The answer key of an MCQ was changed: re-mark everyone who already
+    answered it, and update the saved score of results already decided.
+    Returns how many answers were re-marked.
+    """
+    if question.type != Question.Type.MCQ:
+        return 0
+    answers = list(Answer.objects.filter(question=question).select_related("question", "session__invite__test"))
+    for answer in answers:
+        auto_score_mcq(answer)
+    for session in {a.session for a in answers if a.session.score_pct is not None}:
+        Session.objects.filter(pk=session.pk).update(score_pct=session_score_pct(session))
+    return len(answers)

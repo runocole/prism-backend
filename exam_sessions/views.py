@@ -827,7 +827,7 @@ class SubmitResultView(APIView):
                 status=400,
             )
 
-        # Calculate total score percentage
+        # Calculate total score percentage (same formula as rescoring)
         total_points = session.invite.test.total_points
         earned = sum(
             (a.auto_score or 0) + (a.manual_score or 0)

@@ -144,3 +144,44 @@ class AddTimeTests(TestCase):
     def test_decided_result_cannot_reopen(self):
         Session.objects.filter(pk=self.session.pk).update(status=Session.Status.SUBMITTED, decision="fail")
         self.assertEqual(self.add(10).status_code, 400)
+
+
+class RescoreTests(TestCase):
+    """Changing an MCQ's correct option re-marks everyone who already answered it."""
+
+    def test_answer_key_change_remarks_answers_and_scores(self):
+        from django.core.management import call_command
+        from rest_framework.test import APIClient
+        from assessments.models import Question
+        from users.models import User
+        from .models import Answer
+        from .services import submit_session
+
+        user = User.objects.create_user("hr@example.com", "pw-12345678")
+        client = APIClient()
+        client.force_authenticate(user)
+        test = Test.objects.create(title="BD test", duration_mins=30, created_by=user)
+        q = Question.objects.create(test=test, type="mcq", body="2+2?", points=1,
+                                    payload={"options": ["3", "4", "5"], "correct_index": 0})
+        invite = Invite.objects.create(test=test, candidate_name="A", candidate_email="a@example.com")
+        session = Session.objects.create(invite=invite, status=Session.Status.IN_PROGRESS)
+        Answer.objects.create(session=session, question=q, response={"selected_index": 1})
+        submit_session(session)
+        a = Answer.objects.get(session=session)
+        self.assertFalse(a.is_correct)
+        Session.objects.filter(pk=session.pk).update(score_pct=0, decision="fail")
+
+        r = client.patch(f"/api/v1/assessments/{test.id}/questions/{q.id}/",
+                         {"payload": {"options": ["3", "4", "5"], "correct_index": 1}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        a.refresh_from_db()
+        self.assertTrue(a.is_correct)
+        self.assertEqual(a.auto_score, 1)
+        session.refresh_from_db()
+        self.assertEqual(session.score_pct, 100)
+
+        # the one-off command for keys edited before this existed
+        Answer.objects.filter(pk=a.pk).update(is_correct=False, auto_score=0)
+        call_command("rescore_mcq", stdout=__import__("io").StringIO())
+        a.refresh_from_db()
+        self.assertTrue(a.is_correct)

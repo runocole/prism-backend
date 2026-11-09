@@ -171,10 +171,16 @@ class QuestionDetailView(APIView):
             return Response(
                 {"success": False, "error": "Question not found."}, status=404
             )
+        old_key = (question.payload or {}).get("correct_index")
         serializer = QuestionSerializer(question, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         touch(question.test_id)
+        question.refresh_from_db()
+        if (question.payload or {}).get("correct_index") != old_key:
+            # Answer key changed: re-mark everyone who already answered it
+            from exam_sessions.services import rescore_question
+            rescore_question(question)
         return success(serializer.data)
 
     def delete(self, request, pk, q_pk):
