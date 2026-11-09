@@ -258,7 +258,14 @@ class ValidateInviteView(APIView):
         if invite.status == Invite.Status.SUBMITTED:
             return gone("submitted", "You have already completed this assessment. Thank you!")
 
-        if invite.status == Invite.Status.EXPIRED:
+        # Already in the waiting room or the test (e.g. refreshed the page):
+        # the expiry time doesn't apply to them, only to people who haven't started
+        from exam_sessions.models import Session
+        inside = Session.objects.filter(
+            invite=invite, status__in=[Session.Status.WAITING, Session.Status.IN_PROGRESS],
+        ).exists()
+
+        if invite.status == Invite.Status.EXPIRED and not inside:
             newer = Invite.objects.filter(
                 test=invite.test, candidate_email__iexact=invite.candidate_email,
                 created_at__gt=invite.created_at,
@@ -267,7 +274,7 @@ class ValidateInviteView(APIView):
                 return gone("replaced", "This link was replaced by a newer one. Please use the most recent email we sent you.")
             return gone("expired", "This test link has expired. Please contact the recruitment team.")
 
-        if timezone.now() > invite.expires_at:
+        if timezone.now() > invite.expires_at and not inside:
             return gone("expired", "This test link has expired. Please contact the recruitment team.")
 
         if invite.opens_at and timezone.now() < invite.opens_at:

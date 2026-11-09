@@ -68,6 +68,16 @@ def submit_session(session: Session):
     # Run MCQ auto-scoring
     score_session(session)
 
+def finish_out_of_time_sessions():
+    """Submit every running test whose time is up (candidate closed the page or lost connection)."""
+    running = Session.objects.filter(status=Session.Status.IN_PROGRESS).select_related("invite__test")
+    for session in running:
+        if session.is_expired:
+            session.status = Session.Status.TIMED_OUT
+            session.save(update_fields=["status"])
+            submit_session(session)
+
+
 def session_score_pct(session: Session) -> float:
     total_points = session.invite.test.total_points
     earned = sum((a.auto_score or 0) + (a.manual_score or 0) for a in session.answers.all())

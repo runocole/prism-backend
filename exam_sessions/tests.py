@@ -185,3 +185,52 @@ class RescoreTests(TestCase):
         call_command("rescore_mcq", stdout=__import__("io").StringIO())
         a.refresh_from_db()
         self.assertTrue(a.is_correct)
+
+
+@override_settings(MEDIA_ROOT=TMP + "/media", PRIVATE_MEDIA_ROOT=TMP + "/private", STORAGE_ENDPOINT_URL="")
+class ExpiryTests(TestCase):
+    """Link expiry (e.g. 12:00) stops new people, never someone already inside."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        test = Test.objects.create(title="BD test", duration_mins=60)
+        past = timezone.now() - timedelta(minutes=1)  # "Expires 12:00" and it's now 12:01
+        self.inside = Invite.objects.create(test=test, candidate_name="Afo Martina", candidate_email="afo@example.com",
+                                            expires_at=past, status="active")
+        self.session = Session.objects.create(invite=self.inside, status=Session.Status.IN_PROGRESS,
+                                              started_at=timezone.now() - timedelta(minutes=20))
+        self.newcomer = Invite.objects.create(test=test, candidate_name="Late", candidate_email="late@example.com",
+                                              expires_at=past)
+
+    def beat(self, invite, sid):
+        return self.client.post(f"/api/v1/sessions/{sid}/heartbeat/", {"answered": 3},
+                                HTTP_X_INVITE_TOKEN=str(invite.token))
+
+    def test_candidate_inside_keeps_going_after_expiry(self):
+        r = self.beat(self.inside, self.session.id)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.client.get(f"/api/v1/invites/validate/{self.inside.token}/").status_code, 200)
+        # even if an older build already flipped the invite to expired
+        Invite.objects.filter(pk=self.inside.pk).update(status="expired")
+        self.assertEqual(self.beat(self.inside, self.session.id).status_code, 200)
+        self.inside.refresh_from_db()
+        self.assertEqual(self.inside.status, "active")
+
+    def test_new_person_blocked_after_expiry(self):
+        r = self.client.get(f"/api/v1/invites/validate/{self.newcomer.token}/")
+        self.assertEqual(r.status_code, 410)
+        self.assertEqual(r.json()["code"], "expired")
+
+    def test_out_of_time_test_shows_in_results(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from rest_framework.test import APIClient
+        from users.models import User
+        Session.objects.filter(pk=self.session.pk).update(started_at=timezone.now() - timedelta(minutes=90))
+        client = APIClient()
+        client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        r = client.get("/api/v1/sessions/")
+        self.assertEqual(r.status_code, 200)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, "submitted")

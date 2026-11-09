@@ -472,6 +472,8 @@ class SessionListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from .services import finish_out_of_time_sessions
+        finish_out_of_time_sessions()
         sessions = Session.objects.select_related(
             "invite__test", "invite", "invite__job", "reviewed_by"
         ).order_by("-started_at")
