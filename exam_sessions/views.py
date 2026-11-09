@@ -614,6 +614,56 @@ class RecordingStreamView(APIView):
         return response
 
 
+class AddTimeView(APIView):
+    """
+    HR: POST {"minutes": 10}
+    - Test still running (or waiting): adds the minutes to the clock.
+    - Test ended (ran out of time / submitted) but not yet decided: reopens it
+      so the candidate can continue from where they stopped with exactly
+      that many minutes left, using the same link. Answers are kept.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            minutes = int(request.data.get("minutes") or 10)
+        except (TypeError, ValueError):
+            minutes = 10
+        if not 1 <= minutes <= 180:
+            return Response({"success": False, "error": "Choose between 1 and 180 minutes."}, status=400)
+        session = Session.objects.select_related("invite__test").filter(pk=pk).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+
+        reopened = False
+        if session.status in (Session.Status.WAITING, Session.Status.IN_PROGRESS) and not session.is_expired:
+            session.extra_seconds += minutes * 60
+            session.save(update_fields=["extra_seconds"])
+        else:
+            if session.decision or session.status == Session.Status.REVIEWED:
+                return Response({"success": False, "error": "This result has already been decided, so the test can't be reopened."}, status=400)
+            if session.status == Session.Status.WAITING:
+                session.extra_seconds += minutes * 60
+            else:
+                # exactly `minutes` left from now
+                base = session.invite.test.duration_mins * 60
+                elapsed = int((timezone.now() - session.started_at).total_seconds())
+                session.extra_seconds = max(0, elapsed - base) + minutes * 60
+                session.status = Session.Status.IN_PROGRESS
+                session.submitted_at = None
+                reopened = True
+            session.save(update_fields=["extra_seconds", "status", "submitted_at"])
+            invite = session.invite
+            invite.status = Invite.Status.ACTIVE
+            invite.expires_at = max(invite.expires_at, timezone.now() + timedelta(minutes=minutes + 60))
+            invite.save(update_fields=["status", "expires_at"])
+        return success({
+            "remaining_seconds": session.remaining_seconds,
+            "status": session.status,
+            "reopened": reopened,
+        })
+
+
 class ConfirmAttendanceView(APIView):
     """
     Public (from the "Confirm your attendance" button in the next-stage email).

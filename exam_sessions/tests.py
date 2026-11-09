@@ -93,3 +93,54 @@ class Round9Tests(TestCase):
         self.assertEqual(r.status_code, 404)
         r = self.client.get("/api/v1/sessions/confirm-attendance/")
         self.assertEqual(r.status_code, 405)  # GET (link scanners) never confirms
+
+
+@override_settings(MEDIA_ROOT=TMP + "/media", PRIVATE_MEDIA_ROOT=TMP + "/private", STORAGE_ENDPOINT_URL="")
+class AddTimeTests(TestCase):
+    """Network dropped: HR adds time, or reopens a test that ran out."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from rest_framework.test import APIClient
+        from users.models import User
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        test = Test.objects.create(title="BD test", duration_mins=30)
+        self.invite = Invite.objects.create(test=test, candidate_name="Zakari Haruna", candidate_email="z@example.com")
+        # started 29 min 48 s ago: 12 seconds left, like the Live screenshot
+        self.session = Session.objects.create(
+            invite=self.invite, status=Session.Status.IN_PROGRESS,
+            started_at=timezone.now() - timedelta(minutes=29, seconds=48))
+
+    def add(self, minutes):
+        return self.client.post(f"/api/v1/sessions/{self.session.id}/add-time/", {"minutes": minutes}, format="json")
+
+    def test_running_test_gets_more_time(self):
+        r = self.add(10)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertAlmostEqual(r.json()["data"]["remaining_seconds"], 612, delta=3)
+        self.assertFalse(r.json()["data"]["reopened"])
+
+    def test_timed_out_test_reopens_with_exact_minutes(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        Session.objects.filter(pk=self.session.pk).update(
+            status=Session.Status.SUBMITTED, submitted_at=timezone.now(),
+            started_at=timezone.now() - timedelta(minutes=70))
+        Invite.objects.filter(pk=self.invite.pk).update(status="submitted")
+        r = self.add(15)
+        self.assertEqual(r.status_code, 200, r.content)
+        d = r.json()["data"]
+        self.assertTrue(d["reopened"])
+        self.assertEqual(d["status"], "in_progress")
+        self.assertAlmostEqual(d["remaining_seconds"], 900, delta=3)
+        self.invite.refresh_from_db()
+        self.assertEqual(self.invite.status, "active")
+        # the candidate's link works again and resumes the same session
+        r = self.client.get(f"/api/v1/invites/validate/{self.invite.token}/")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_decided_result_cannot_reopen(self):
+        Session.objects.filter(pk=self.session.pk).update(status=Session.Status.SUBMITTED, decision="fail")
+        self.assertEqual(self.add(10).status_code, 400)

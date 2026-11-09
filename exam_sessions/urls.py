@@ -25,6 +25,7 @@ from .views import (
     RecordingStreamView,
     OutcomeEmailView,
     ConfirmAttendanceView,
+    AddTimeView,
 )
 
 urlpatterns = [
@@ -43,6 +44,7 @@ urlpatterns = [
     path("", SessionListView.as_view(), name="session-list"),
     path("live/", LiveSessionsView.as_view(), name="session-live"),
     path("outcome-emails/", OutcomeEmailView.as_view(), name="session-outcome-emails"),
+    path("<int:pk>/add-time/", AddTimeView.as_view(), name="session-add-time"),
     path("confirm-attendance/", ConfirmAttendanceView.as_view(), name="session-confirm-attendance"),
     path("<int:pk>/start-test/", StartTestView.as_view(), name="session-start-test"),
     path("<int:pk>/live-token/hr/", HrLiveTokenView.as_view(), name="session-live-token-hr"),

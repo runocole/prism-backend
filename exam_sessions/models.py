@@ -38,6 +38,8 @@ class Session(models.Model):
 
     # Server-authoritative timer — client syncs against these every 60s
     started_at = models.DateTimeField(default=timezone.now)
+    # Extra time HR gave (e.g. after a network drop), in seconds
+    extra_seconds = models.PositiveIntegerField(default=0)
     submitted_at = models.DateTimeField(null=True, blank=True)
 
     # Object storage path to the assembled recording file
@@ -94,7 +96,7 @@ class Session(models.Model):
         Server-authoritative seconds remaining.
         Frontend syncs its countdown against this every 60 seconds.
         """
-        duration = self.invite.test.duration_mins * 60
+        duration = self.invite.test.duration_mins * 60 + self.extra_seconds
         if self.status == self.Status.WAITING:
             return duration  # the clock hasn't started yet
         return max(duration - self.elapsed_seconds, 0)
