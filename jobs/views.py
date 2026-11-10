@@ -613,6 +613,25 @@ class ManualScreenInView(APIView):
         return success(ApplicationSerializer(application).data)
 
 
+class ManualScreenOutView(APIView):
+    """HR manually screens a candidate out (the opposite of Screen in; reversible)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, app_id):
+        application = Application.objects.filter(pk=app_id, job__pk=pk).first()
+        if not application:
+            return Response({"success": False, "error": "Application not found."}, status=404)
+        if application.status not in (Application.Status.SCREENED_IN, Application.Status.PENDING):
+            return Response(
+                {"success": False, "error": "Only candidates who are screened in or waiting to be screened can be screened out."},
+                status=400,
+            )
+        application.status = Application.Status.SCREENED_OUT
+        application.ai_summary = (application.ai_summary or "") + " | Manually screened out by HR."
+        application.save(update_fields=["status", "ai_summary"])
+        return success(ApplicationSerializer(application).data)
+
+
 class BatchEmailView(APIView):
     """
     HR sends a unique exam invite to all screened-in candidates for a job.
