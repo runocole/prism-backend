@@ -100,7 +100,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "cv", "cover_letter", "linkedin", "twitter", "github",
             "other_social", "screening_answers", "status", "ai_score", "ai_details",
             "ai_summary", "ai_screened_at", "submitted_at",
-            "form_sent_at", "form_completed_at",
+            "form_sent_at", "form_completed_at", "rejection_emailed_at",
         )
         read_only_fields = fields
 

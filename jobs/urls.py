@@ -13,6 +13,7 @@ from .views import (
     ManualScreenInView,
     ManualScreenOutView,
     BatchEmailView,
+    EmailScreenedOutView,
     JobLinkListCreateView,
     JobLinkDetailView,
     StandardQuestionsView,
@@ -40,6 +41,7 @@ urlpatterns = [
     path("<int:pk>/applications/<int:app_id>/resend-form/", ResendFormView.as_view(), name="resend-form"),
     path("<int:pk>/remind-awaiting/", RemindAwaitingView.as_view(), name="remind-awaiting"),
     path("<int:pk>/batch-email/", BatchEmailView.as_view(), name="batch-email"),
+    path("<int:pk>/email-screened-out/", EmailScreenedOutView.as_view(), name="email-screened-out"),
     path("<int:pk>/import-cvs/", ImportCvsView.as_view(), name="import-cvs"),
     path("imports/<uuid:import_id>/", CvImportStatusView.as_view(), name="import-status"),
 

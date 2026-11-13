@@ -632,6 +632,29 @@ class ManualScreenOutView(APIView):
         return success(ApplicationSerializer(application).data)
 
 
+class EmailScreenedOutView(APIView):
+    """
+    HR: POST — sends the polite "not shortlisted" email to this job's screened-out
+    candidates who haven't had it yet. Optional {"application_ids": [...]} to pick.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from .emails import send_not_shortlisted_emails
+        job = JobPost.objects.filter(pk=pk).first()
+        if not job:
+            return Response({"success": False, "error": "Job not found."}, status=404)
+        apps = job.applications.filter(status=Application.Status.SCREENED_OUT, rejection_emailed_at__isnull=True)
+        chosen = request.data.get("application_ids")
+        if chosen:
+            apps = apps.filter(id__in=[int(i) for i in chosen if str(i).isdigit()])
+        ids = list(apps.values_list("id", flat=True))
+        if not ids:
+            return Response({"success": False, "error": "Everyone screened out has already been emailed."}, status=400)
+        run_in_background(send_not_shortlisted_emails, ids)
+        return success({"queued": len(ids), "application_ids": ids})
+
+
 class BatchEmailView(APIView):
     """
     HR sends a unique exam invite to all screened-in candidates for a job.

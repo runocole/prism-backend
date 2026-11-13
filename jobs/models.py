@@ -197,6 +197,8 @@ class Application(models.Model):
     form_token = models.UUIDField(null=True, blank=True, unique=True)
     form_sent_at = models.DateTimeField(null=True, blank=True)
     form_completed_at = models.DateTimeField(null=True, blank=True)
+    # "Not shortlisted" email sent after being screened out (so nobody gets it twice)
+    rejection_emailed_at = models.DateTimeField(null=True, blank=True)
 
     # Personal info
     first_name = models.CharField(max_length=150)
