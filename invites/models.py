@@ -51,6 +51,8 @@ class Invite(models.Model):
     expires_at = models.DateTimeField(default=default_expiry)
     # The link only works from this time (e.g. sent the day before, opens 8:00 AM)
     opens_at = models.DateTimeField(null=True, blank=True)
+    # Staggered sending: which wave of the send this person is in (1, 2, 3…)
+    wave = models.PositiveSmallIntegerField(null=True, blank=True)
     # The job this test is for — puts the result in that job's folder on Results
     job = models.ForeignKey(
         "jobs.JobPost",

@@ -306,18 +306,19 @@ class SectionsAndMarkingTests(TestCase):
 
 
 class QuestionTypeChangeTests(SectionsAndMarkingTests):
-    def test_type_change_only_before_anyone_answered(self):
-        from assessments.models import Question
-        fresh = Question.objects.create(test=self.test, type="short_answer", section="A", body="Two frameworks?",
-                                        payload={"word_limit": 300}, points=5, order_index=5)
-        url = f"/api/v1/assessments/{self.test.id}/questions/"
-        r = self.hr.patch(f"{url}{fresh.id}/", {"type": "list", "payload": {"count": 2}}, format="json")
-        self.assertEqual(r.status_code, 200, r.content)
-        fresh.refresh_from_db()
-        self.assertEqual((fresh.type, fresh.payload["count"]), ("list", 2))
-        # already answered: refused
-        r = self.hr.patch(f"{url}{self.lst.id}/", {"type": "short_answer", "payload": {"word_limit": 300}}, format="json")
+    def test_type_change_blocked_only_while_someone_is_taking_the_test(self):
+        url = f"/api/v1/assessments/{self.test.id}/questions/{self.lst.id}/"
+        change = {"type": "short_answer", "payload": {"word_limit": 300}}
+        # Ada is still writing: blocked
+        r = self.hr.patch(url, change, format="json")
         self.assertEqual(r.status_code, 400)
+        self.assertIn("taking this test right now", r.json()["error"])
+        # She has finished (even though she answered it): allowed, her answer is kept
+        Session.objects.filter(pk=self.session.pk).update(status=Session.Status.SUBMITTED)
+        r = self.hr.patch(url, change, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.a_list.refresh_from_db()
+        self.assertEqual(self.a_list.response, {"items": ["a", "b", "c"]})
 
 
 class YesNoQuestionTests(SectionsAndMarkingTests):
@@ -332,3 +333,22 @@ class YesNoQuestionTests(SectionsAndMarkingTests):
         qs = self.client.get(f"/api/v1/sessions/{self.session.id}/questions/", HTTP_X_INVITE_TOKEN=str(self.invite.token)).json()["data"]
         yn = [q for q in qs if q["type"] == "yes_no"][0]
         self.assertEqual(yn["payload"]["follow_up_prompt"], "If yes, tell us.")
+
+
+class WaveTests(TestCase):
+    def test_batch_send_records_wave_and_window(self):
+        from unittest import mock
+        from rest_framework.test import APIClient
+        from users.models import User
+        client = APIClient()
+        client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        test = Test.objects.create(title="BDE", duration_mins=40)
+        with mock.patch("invites.views.run_in_background"):
+            r = client.post("/api/v1/invites/batch/", {
+                "test_id": test.id, "wave": 2,
+                "opens_at": "2026-12-01T10:40:00+01:00", "expires_at": "2026-12-01T10:55:00+01:00",
+                "candidates": [{"name": "Ada Obi", "email": "ada@example.com"}],
+            }, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()["data"]["invites"][0]["wave"], 2)
+        self.assertEqual(Invite.objects.get().wave, 2)

@@ -712,9 +712,12 @@ class BatchEmailView(APIView):
             return Response({"success": False, "error": "The test must open before it expires."}, status=400)
         if not test.questions.exists():
             return Response({"success": False, "error": "That test has no questions yet."}, status=400)
+        from invites.views import wave_of
+        wave = wave_of(request.data)
         pairs = []
         for app in screened_in:
             invite = Invite.objects.create(
+                wave=wave,
                 test=test,
                 candidate_name=f"{app.first_name} {app.last_name}".strip(),
                 candidate_email=app.email,

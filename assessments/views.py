@@ -173,11 +173,18 @@ class QuestionDetailView(APIView):
             )
         old_key = (question.payload or {}).get("correct_index")
         new_type = request.data.get("type")
-        if new_type and new_type != question.type and question.answer_set.exists():
-            return Response(
-                {"success": False, "error": "Candidates have already answered this question, so its type can't be changed. Add a new question instead."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if new_type and new_type != question.type:
+            from exam_sessions.models import Session
+            busy = Session.objects.filter(
+                invite__test_id=question.test_id,
+                status__in=[Session.Status.WAITING, Session.Status.IN_PROGRESS],
+            ).count()
+            if busy:
+                return Response(
+                    {"success": False, "error": f"{busy} candidate{'s are' if busy != 1 else ' is'} taking this test right now, "
+                     "so question types can't change until they finish. Wording, points and answers can still be edited."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         serializer = QuestionSerializer(question, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()

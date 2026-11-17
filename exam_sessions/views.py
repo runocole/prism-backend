@@ -415,6 +415,8 @@ class LiveSessionsView(APIView):
                 "status": s.status,
                 "face_status": s.face_status,
                 "duration_mins": s.invite.test.duration_mins,
+                "wave": s.invite.wave,
+                "opens_at": s.invite.opens_at,
             })
         return success({"sessions": data, "live_video": livekit.is_configured()})
 

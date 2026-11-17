@@ -43,7 +43,16 @@ def default_expiry():
     return timezone.now() + timedelta(hours=hours)
 
 
-def get_or_refresh_invite(test, name, email, expires_at, user, job=None, opens_at=None):
+def wave_of(data):
+    """The wave number sent with a request (None if not sent in waves)."""
+    try:
+        w = int(data.get("wave") or 0)
+    except (TypeError, ValueError):
+        return None
+    return w if 1 <= w <= 99 else None
+
+
+def get_or_refresh_invite(test, name, email, expires_at, user, job=None, opens_at=None, wave=None):
     """
     Sending a test again to the same person re-sends their EXISTING link
     (with the new expiry) instead of cancelling it, so every email they
@@ -65,11 +74,15 @@ def get_or_refresh_invite(test, name, email, expires_at, user, job=None, opens_a
             existing.job = job
         if opens_at is not None or existing.status == Invite.Status.PENDING:
             existing.opens_at = opens_at
-        existing.save(update_fields=["candidate_name", "expires_at", "job", "opens_at"])
+            if existing.status == Invite.Status.PENDING:
+                # a new wave's window replaces the old one for someone who hasn't started
+                existing.expires_at = expires_at
+        existing.wave = wave
+        existing.save(update_fields=["candidate_name", "expires_at", "job", "opens_at", "wave"])
         return existing
     return Invite.objects.create(
         test=test, candidate_name=name, candidate_email=email,
-        expires_at=expires_at, created_by=user, job=job, opens_at=opens_at,
+        expires_at=expires_at, created_by=user, job=job, opens_at=opens_at, wave=wave,
     )
 
 
@@ -112,7 +125,7 @@ class InviteListCreateView(APIView):
         invite = get_or_refresh_invite(
             test, d["candidate_name"], d["candidate_email"],
             d.get("expires_at") or default_expiry(), request.user, job=_job_from(d),
-            opens_at=d.get("opens_at"),
+            opens_at=d.get("opens_at"), wave=wave_of(request.data),
         )
 
         run_in_background(send_invite_emails, [invite.id])
@@ -168,7 +181,7 @@ class BatchInviteCreateView(APIView):
                 invite = get_or_refresh_invite(
                     test, name, email,
                     expires_at or default_expiry(), request.user, job=job,
-                    opens_at=d.get("opens_at"),
+                    opens_at=d.get("opens_at"), wave=wave_of(request.data),
                 )
             except Exception:
                 import logging

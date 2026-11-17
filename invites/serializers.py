@@ -24,7 +24,7 @@ class InviteSerializer(serializers.ModelSerializer):
         model = Invite
         fields = (
             "id", "test", "test_title", "test_job_role", "job", "job_title", "session_id", "candidate_name",
-            "candidate_email", "token", "status", "expires_at", "opens_at",
+            "candidate_email", "token", "status", "expires_at", "opens_at", "wave",
             "invite_url", "created_at",
         )
         read_only_fields = (
