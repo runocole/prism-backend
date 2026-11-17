@@ -72,7 +72,9 @@ def send_invite_email(invite: Invite, job_title: str | None = None) -> bool:
     )
 
 
-def send_invite_emails(invite_ids: list[int]):
-    """Background job for single/batch invites."""
+def send_invite_emails(invite_ids: list[int], job_title: str | None = None):
+    """Background job for single/batch invites (and Resend). Records whether each email went out."""
+    from django.utils import timezone
     for invite in Invite.objects.select_related("test", "job").filter(pk__in=invite_ids):
-        send_invite_email(invite)
+        ok = send_invite_email(invite, job_title)
+        Invite.objects.filter(pk=invite.pk).update(email_failed_at=None if ok else timezone.now())

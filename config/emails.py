@@ -14,12 +14,19 @@ company name still shows as text.
 
 import html
 import logging
+import threading
+import time
 from email.utils import parseaddr
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 
 logger = logging.getLogger(__name__)
+
+# Several background senders (e.g. one per wave) share this, so they take turns
+# instead of all opening connections to the mail server at the same moment.
+_send_lock = threading.Lock()
+RETRY_WAITS = (3, 10)  # seconds before the 2nd and 3rd tries
 
 NAVY = "#02319A"
 NAVY_DEEP = "#021f6b"
@@ -158,9 +165,15 @@ def send_branded(to: str, subject: str, **kwargs) -> bool:
     page, text = render(**kwargs)
     message = EmailMultiAlternatives(subject, text, settings.DEFAULT_FROM_EMAIL, [to], reply_to=[hr_address()])
     message.attach_alternative(page, "text/html")
-    try:
-        message.send(fail_silently=False)
-        return True
-    except Exception:
-        logger.exception("Email to %s failed: %s", to, subject)
-        return False
+    for attempt in range(len(RETRY_WAITS) + 1):
+        try:
+            with _send_lock:
+                message.send(fail_silently=False)
+            return True
+        except Exception:
+            if attempt < len(RETRY_WAITS):
+                logger.warning("Email to %s failed (try %s), retrying: %s", to, attempt + 1, subject)
+                time.sleep(RETRY_WAITS[attempt])
+            else:
+                logger.exception("Email to %s failed after %s tries: %s", to, attempt + 1, subject)
+    return False

@@ -226,6 +226,33 @@ class InviteDetailView(APIView):
         )
 
 
+class ResendInviteView(APIView):
+    """
+    HR: send the invitation email again (same link). Also revives an invite that
+    was wrongly marked expired because its email failed, as long as its time
+    window hasn't passed and the candidate hasn't started.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        invite = Invite.objects.select_related("test", "job").filter(pk=pk).first()
+        if not invite:
+            return Response({"success": False, "error": "Invite not found."}, status=404)
+        if invite.status == Invite.Status.SUBMITTED:
+            return Response({"success": False, "error": "They've already taken the test."}, status=400)
+        if invite.expires_at <= timezone.now():
+            return Response({"success": False, "error": "This link's time has passed. Send them the test again with new times."}, status=400)
+        if invite.status == Invite.Status.EXPIRED and not hasattr(invite, "session"):
+            invite.status = Invite.Status.PENDING
+            invite.save(update_fields=["status"])
+        if invite.job_id:
+            from jobs.models import Application
+            Application.objects.filter(job_id=invite.job_id, email__iexact=invite.candidate_email,
+                                       status=Application.Status.SCREENED_IN).update(status=Application.Status.INVITED)
+        run_in_background(send_invite_emails, [invite.id], invite.job.title if invite.job_id else None)
+        return success(InviteSerializer(invite, context={"request": request}).data)
+
+
 class RevokeInviteView(APIView):
     permission_classes = [IsAuthenticated]
 

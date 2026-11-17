@@ -8,6 +8,7 @@ from .views import (
     BatchInviteCreateView,
     InviteDetailView,
     RevokeInviteView,
+    ResendInviteView,
     ValidateInviteView,
 )
 
@@ -16,6 +17,7 @@ urlpatterns = [
     path("batch/", BatchInviteCreateView.as_view(), name="invite-batch"),
     path("<int:pk>/", InviteDetailView.as_view(), name="invite-detail"),
     path("<int:pk>/revoke/", RevokeInviteView.as_view(), name="invite-revoke"),
+    path("<int:pk>/resend/", ResendInviteView.as_view(), name="invite-resend"),
     # Public — candidate validates their token before starting
     path("validate/<uuid:token>/", ValidateInviteView.as_view(), name="invite-validate"),
 ]

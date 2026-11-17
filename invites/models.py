@@ -53,6 +53,8 @@ class Invite(models.Model):
     opens_at = models.DateTimeField(null=True, blank=True)
     # Staggered sending: which wave of the send this person is in (1, 2, 3…)
     wave = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Set when the invitation email couldn't be sent (the link still works; HR can resend)
+    email_failed_at = models.DateTimeField(null=True, blank=True)
     # The job this test is for — puts the result in that job's folder on Results
     job = models.ForeignKey(
         "jobs.JobPost",

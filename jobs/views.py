@@ -749,9 +749,6 @@ def send_job_invite_emails(pairs: list[tuple[int, int]], job_title: str):
             invite = Invite.objects.select_related("test").get(pk=invite_id)
         except Invite.DoesNotExist:
             continue
-        if not send_invite_email(invite, job_title):
-            invite.status = Invite.Status.EXPIRED
-            invite.save(update_fields=["status"])
-            Application.objects.filter(pk=app_id).update(
-                status=Application.Status.SCREENED_IN
-            )
+        # The link stays valid either way; a failed email is flagged so HR can press Resend
+        ok = send_invite_email(invite, job_title)
+        Invite.objects.filter(pk=invite.pk).update(email_failed_at=None if ok else timezone.now())
