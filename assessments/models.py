@@ -43,6 +43,12 @@ class Test(models.Model):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT
     )
+    # Shown to candidates before they start (empty = the standard instructions)
+    instructions = models.TextField(blank=True)
+    # Optional sections, in order:
+    # [{"key": "A", "title": "Section A", "description": "...", "quantitative": false}, ...]
+    # A "quantitative" (calculation) section allows looking away to work things out.
+    sections = models.JSONField(default=list, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -70,11 +76,15 @@ class Question(models.Model):
     class Type(models.TextChoices):
         MCQ = "mcq", "Multiple Choice"
         SHORT_ANSWER = "short_answer", "Short Answer / Essay"
+        LIST = "list", "List (numbered answers)"     # payload: {"count": 5}
+        RIGHT_WRONG = "right_wrong", "Right / wrong"   # payload: {"answer": "625" (optional), "answer_type": "text"|"number"}
 
     test = models.ForeignKey(
         Test, on_delete=models.CASCADE, related_name="questions"
     )
     type = models.CharField(max_length=20, choices=Type.choices)
+    # Key of the test section this question belongs to ("" = no sections)
+    section = models.CharField(max_length=20, blank=True)
 
     # Question text — stored as plain text or HTML string from the rich-text editor
     body = models.TextField()

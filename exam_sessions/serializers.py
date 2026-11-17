@@ -13,7 +13,7 @@ class ViolationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Violation
-        fields = ("id", "type", "type_label", "occurred_at", "snapshot_path", "video_offset_seconds", "recording_part")
+        fields = ("id", "type", "type_label", "occurred_at", "snapshot_path", "video_offset_seconds", "recording_part", "section")
         read_only_fields = ("id", "occurred_at")
 
 
@@ -24,6 +24,8 @@ class AnswerSerializer(serializers.ModelSerializer):
     graded_by_name = serializers.CharField(source="graded_by.full_name", read_only=True, default=None)
     # Staff review only: the options and correct answer, to show what was picked
     question_payload = serializers.JSONField(source="question.payload", read_only=True)
+    question_section = serializers.CharField(source="question.section", read_only=True)
+    question_order = serializers.IntegerField(source="question.order_index", read_only=True)
     question_image_url = serializers.SerializerMethodField()
 
     def get_question_image_url(self, obj):
@@ -33,8 +35,8 @@ class AnswerSerializer(serializers.ModelSerializer):
         model = Answer
         fields = (
             "id", "question", "question_type", "question_body", "question_points",
-            "question_payload", "question_image_url",
-            "response", "is_correct", "auto_score", "manual_score", "reviewer_comment",
+            "question_payload", "question_image_url", "question_section", "question_order",
+            "response", "is_correct", "auto_score", "manual_score", "item_marks", "reviewer_comment",
             "graded_by_name", "graded_at",
         )
         read_only_fields = ("is_correct", "auto_score")
@@ -50,13 +52,15 @@ class SessionSerializer(serializers.ModelSerializer):
     candidate_name = serializers.CharField(source="invite.candidate_name", read_only=True)
     candidate_email = serializers.CharField(source="invite.candidate_email", read_only=True)
     test_title = serializers.CharField(source="invite.test.title", read_only=True)
+    test_sections = serializers.JSONField(source="invite.test.sections", read_only=True)
+    job_id = serializers.IntegerField(source="invite.job_id", read_only=True)
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True, default=None)
     graded_by_name = serializers.CharField(read_only=True)
 
     class Meta:
         model = Session
         fields = (
-            "id", "candidate_name", "candidate_email", "test_title",
+            "id", "candidate_name", "candidate_email", "test_title", "test_sections", "job_id",
             "status", "started_at", "submitted_at", "remaining_seconds",
             "recording_path", "violation_count", "answers", "violations",
             "decision", "decision_notes", "score_pct", "reviewed_by_email", "reviewed_at",
@@ -92,5 +96,9 @@ class SaveDraftSerializer(serializers.Serializer):
 class ReviewScoreSerializer(serializers.Serializer):
     """Payload for a reviewer scoring a short-answer response."""
 
-    manual_score = serializers.FloatField(min_value=0)
+    manual_score = serializers.FloatField(min_value=0, required=False)
+    # Tick / cross: right-wrong questions
+    is_correct = serializers.BooleanField(required=False, allow_null=True)
+    # Tick / cross per row: list questions
+    item_marks = serializers.ListField(child=serializers.BooleanField(allow_null=True), required=False)
     reviewer_comment = serializers.CharField(required=False, allow_blank=True)

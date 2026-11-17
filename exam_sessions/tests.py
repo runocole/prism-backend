@@ -234,3 +234,72 @@ class ExpiryTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.session.refresh_from_db()
         self.assertEqual(self.session.status, "submitted")
+
+
+class SectionsAndMarkingTests(TestCase):
+    """Sections, list + right/wrong questions, tick/cross marking, hidden answers."""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from assessments.models import Question
+        from users.models import User
+        from .models import Answer
+        user = User.objects.create_user("hr@example.com", "pw-12345678")
+        self.hr = APIClient()
+        self.hr.force_authenticate(user)
+        self.test = Test.objects.create(title="BDE", duration_mins=30, sections=[
+            {"key": "A", "title": "Section A", "description": "General", "quantitative": False},
+            {"key": "B", "title": "Section B", "description": "Maths", "quantitative": True},
+        ])
+        # created out of order on purpose: section A must come first
+        self.rw = Question.objects.create(test=self.test, type="right_wrong", section="B", body="25 x 25 =", points=2,
+                                          payload={"answer": "625", "answer_type": "number"}, order_index=0)
+        self.lst = Question.objects.create(test=self.test, type="list", section="A", body="List 3 traits", points=3,
+                                           payload={"count": 3}, order_index=1)
+        self.invite = Invite.objects.create(test=self.test, candidate_name="Ada", candidate_email="ada@example.com")
+        self.session = Session.objects.create(invite=self.invite, status=Session.Status.IN_PROGRESS)
+        self.a_rw = Answer.objects.create(session=self.session, question=self.rw, response={"text": "625"})
+        self.a_list = Answer.objects.create(session=self.session, question=self.lst, response={"items": ["a", "b", "c"]})
+
+    def test_candidate_gets_sections_in_order_without_answers(self):
+        r = self.client.get(f"/api/v1/sessions/{self.session.id}/questions/", HTTP_X_INVITE_TOKEN=str(self.invite.token))
+        self.assertEqual(r.status_code, 200, r.content)
+        qs = r.json()["data"]
+        self.assertEqual([q["section"] for q in qs], ["A", "B"])
+        self.assertNotIn("answer", qs[1]["payload"])  # the 625 never reaches the candidate
+
+    def test_tick_cross_marking(self):
+        url = f"/api/v1/sessions/{self.session.id}/answers/"
+        r = self.hr.post(f"{url}{self.a_rw.id}/score/", {"is_correct": True}, format="json")
+        self.assertEqual(r.json()["data"]["manual_score"], 2.0)
+        r = self.hr.post(f"{url}{self.a_list.id}/score/", {"item_marks": [True, False, True]}, format="json")
+        self.assertEqual(r.json()["data"]["manual_score"], 2.0)  # 2 of 3 rows x 3 points
+        self.assertEqual(r.json()["data"]["item_marks"], [True, False, True])
+        # clearing a right/wrong mark removes its score
+        r = self.hr.post(f"{url}{self.a_rw.id}/score/", {"is_correct": None}, format="json")
+        self.assertIsNone(r.json()["data"]["manual_score"])
+
+    def test_violation_section_and_review_payload(self):
+        r = self.client.post(f"/api/v1/sessions/{self.session.id}/violations/",
+                             {"token": str(self.invite.token), "type": "tab_switch", "section": "B"},
+                             content_type="application/json", HTTP_X_INVITE_TOKEN=str(self.invite.token))
+        self.assertLess(r.status_code, 300, r.content)
+        data = self.hr.get(f"/api/v1/sessions/{self.session.id}/").json()["data"]
+        self.assertEqual(data["violations"][0]["section"], "B")
+        self.assertEqual([s["key"] for s in data["test_sections"]], ["A", "B"])
+        self.assertTrue(all("question_section" in a for a in data["answers"]))
+
+    def test_sections_and_instructions_saved_and_shown_to_candidate(self):
+        r = self.hr.patch(f"/api/v1/assessments/{self.test.id}/", {
+            "instructions": "Rule one\nRule two",
+            "sections": [{"key": "A", "title": "Section A"}, {"key": "B", "title": "Quant", "quantitative": True}],
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        info = self.client.get(f"/api/v1/invites/validate/{self.invite.token}/").json()["data"]["test"]
+        self.assertEqual(info["instructions"], "Rule one\nRule two")
+        self.assertEqual(info["sections"][1]["quantitative"], True)
+        self.assertEqual(info["sections"][0]["question_count"], 1)
+        # a list question needs 1-20 rows
+        r = self.hr.post(f"/api/v1/assessments/{self.test.id}/questions/",
+                         {"type": "list", "body": "x", "payload": {"count": 0}, "points": 1}, format="json")
+        self.assertEqual(r.status_code, 400)

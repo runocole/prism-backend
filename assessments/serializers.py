@@ -16,7 +16,7 @@ class QuestionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ("id", "type", "body", "payload", "points", "order_index", "image_url")
+        fields = ("id", "type", "section", "body", "payload", "points", "order_index", "image_url")
 
     def get_image_url(self, obj):
         return obj.image.url if obj.image else None
@@ -43,6 +43,14 @@ class QuestionSerializer(serializers.ModelSerializer):
                     {"payload": "Short answer requires a word_limit."}
                 )
 
+        if q_type == Question.Type.LIST:
+            try:
+                count = int(payload.get("count", 0))
+            except (TypeError, ValueError):
+                count = 0
+            if not 1 <= count <= 20:
+                raise serializers.ValidationError({"payload": "A list question needs between 1 and 20 answer rows."})
+
         return data
 
 
@@ -59,9 +67,28 @@ class TestSerializer(serializers.ModelSerializer):
         model = Test
         fields = (
             "id", "title", "description", "job_role", "duration_mins", "pass_mark_pct",
-            "status", "total_points", "created_by_email",
+            "status", "total_points", "created_by_email", "instructions", "sections",
             "created_at", "updated_at", "questions",
         )
+
+    def validate_sections(self, value):
+        if not isinstance(value, list) or len(value) > 10:
+            raise serializers.ValidationError("Up to 10 sections.")
+        clean, keys = [], set()
+        for i, s in enumerate(value):
+            if not isinstance(s, dict):
+                raise serializers.ValidationError("Each section needs a title.")
+            key = str(s.get("key") or chr(65 + i))[:20]
+            if key in keys:
+                raise serializers.ValidationError("Two sections have the same key.")
+            keys.add(key)
+            clean.append({
+                "key": key,
+                "title": str(s.get("title") or f"Section {chr(65 + i)}")[:120],
+                "description": str(s.get("description") or "")[:2000],
+                "quantitative": bool(s.get("quantitative")),
+            })
+        return clean
         read_only_fields = (
             "status", "created_by_email", "created_at", "updated_at"
         )

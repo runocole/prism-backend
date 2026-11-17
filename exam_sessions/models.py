@@ -142,6 +142,9 @@ class Answer(models.Model):
 
     # Set manually by a reviewer for short answer questions
     manual_score = models.FloatField(null=True, blank=True)
+    # Reviewer's tick/cross: list questions one per row [true, false, null…];
+    # right/wrong questions use is_correct
+    item_marks = models.JSONField(null=True, blank=True)
     reviewer_comment = models.TextField(blank=True)
     graded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -191,6 +194,8 @@ class Violation(models.Model):
     # recording part (a part = one page load; usually just one per session)
     video_offset_seconds = models.FloatField(null=True, blank=True)
     recording_part = models.BigIntegerField(null=True, blank=True)
+    # Test section the candidate was in (key; "" = waiting room / no sections)
+    section = models.CharField(max_length=20, blank=True)
 
     # Optional snapshot image taken at moment of violation
     snapshot_path = models.CharField(max_length=500, blank=True)

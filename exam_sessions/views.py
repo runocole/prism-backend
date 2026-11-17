@@ -118,15 +118,19 @@ class SessionQuestionsView(APIView):
         if session.status != Session.Status.IN_PROGRESS:
             return Response({"success": False, "error": "This test is no longer active."}, status=410)
 
-        questions = session.invite.test.questions.all()
+        test = session.invite.test
+        # Questions in section order (then their own order)
+        rank = {s.get("key"): i for i, s in enumerate(test.sections or [])}
+        questions = sorted(test.questions.all(), key=lambda q: (rank.get(q.section, len(rank)), q.order_index, q.id))
         data = []
         for q in questions:
             q_data = QuestionSerializer(q).data
-            if q.type == Question.Type.MCQ:
-                # Remove the correct answer before sending to the candidate
-                payload = dict(q_data["payload"])
-                payload.pop("correct_index", None)
-                q_data["payload"] = payload
+            # Remove the correct answers before sending to the candidate
+            payload = dict(q_data["payload"])
+            payload.pop("correct_index", None)
+            payload.pop("answer", None)
+            payload.pop("answers", None)
+            q_data["payload"] = payload
             data.append(q_data)
 
         return success(data)
@@ -258,6 +262,7 @@ class LogViolationView(APIView):
             type=serializer.validated_data["type"],
             video_offset_seconds=number("video_offset", float),
             recording_part=number("part", int),
+            section=str(request.data.get("section") or "")[:20],
         )
         return success({"violation_id": violation.id}, status.HTTP_201_CREATED)
 
@@ -780,19 +785,37 @@ class ReviewAnswerView(APIView):
         serializer = ReviewScoreSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Cap score at the question's maximum point value
+        d = serializer.validated_data
         max_points = answer.question.points
-        score = min(serializer.validated_data["manual_score"], max_points)
+        q_type = answer.question.type
 
-        answer.manual_score = score
-        answer.reviewer_comment = serializer.validated_data.get("reviewer_comment", "")
+        if q_type == "list" and "item_marks" in d:
+            # One tick/cross per row; points shared equally between the rows
+            count = int((answer.question.payload or {}).get("count") or len(d["item_marks"]) or 1)
+            marks = (list(d["item_marks"]) + [None] * count)[:count]
+            answer.item_marks = marks
+            answer.is_correct = None
+            answer.manual_score = round(max_points * sum(1 for m in marks if m) / count, 2)
+        elif "is_correct" in d:
+            # Right / wrong (or a written answer marked with a tick/cross)
+            answer.is_correct = d["is_correct"]
+            answer.manual_score = None if d["is_correct"] is None else (float(max_points) if d["is_correct"] else 0.0)
+        elif "manual_score" in d:
+            answer.manual_score = min(d["manual_score"], max_points)  # cap at the question's points
+        else:
+            return Response({"success": False, "error": "Nothing to mark."}, status=400)
+
+        if "reviewer_comment" in d:
+            answer.reviewer_comment = d["reviewer_comment"]
         answer.graded_by = request.user
         answer.graded_at = timezone.now()
-        answer.save(update_fields=["manual_score", "reviewer_comment", "graded_by", "graded_at"])
+        answer.save(update_fields=["manual_score", "is_correct", "item_marks", "reviewer_comment", "graded_by", "graded_at"])
 
         return success({
             "answer_id": answer.id,
             "manual_score": answer.manual_score,
+            "is_correct": answer.is_correct,
+            "item_marks": answer.item_marks,
             "graded_by_name": request.user.full_name,
         })
 

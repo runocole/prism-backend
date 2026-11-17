@@ -292,6 +292,13 @@ class ValidateInviteView(APIView):
                 "description": invite.test.description,
                 "duration_mins": invite.test.duration_mins,
                 "question_count": invite.test.questions.count(),
+                "instructions": invite.test.instructions,
+                "sections": [
+                    {"key": s.get("key"), "title": s.get("title"), "description": s.get("description", ""),
+                     "quantitative": bool(s.get("quantitative")),
+                     "question_count": invite.test.questions.filter(section=s.get("key")).count()}
+                    for s in (invite.test.sections or [])
+                ],
             },
             "expires_at": invite.expires_at,
         })
