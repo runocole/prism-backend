@@ -303,3 +303,18 @@ class SectionsAndMarkingTests(TestCase):
         r = self.hr.post(f"/api/v1/assessments/{self.test.id}/questions/",
                          {"type": "list", "body": "x", "payload": {"count": 0}, "points": 1}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+class QuestionTypeChangeTests(SectionsAndMarkingTests):
+    def test_type_change_only_before_anyone_answered(self):
+        from assessments.models import Question
+        fresh = Question.objects.create(test=self.test, type="short_answer", section="A", body="Two frameworks?",
+                                        payload={"word_limit": 300}, points=5, order_index=5)
+        url = f"/api/v1/assessments/{self.test.id}/questions/"
+        r = self.hr.patch(f"{url}{fresh.id}/", {"type": "list", "payload": {"count": 2}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        fresh.refresh_from_db()
+        self.assertEqual((fresh.type, fresh.payload["count"]), ("list", 2))
+        # already answered: refused
+        r = self.hr.patch(f"{url}{self.lst.id}/", {"type": "short_answer", "payload": {"word_limit": 300}}, format="json")
+        self.assertEqual(r.status_code, 400)

@@ -172,6 +172,12 @@ class QuestionDetailView(APIView):
                 {"success": False, "error": "Question not found."}, status=404
             )
         old_key = (question.payload or {}).get("correct_index")
+        new_type = request.data.get("type")
+        if new_type and new_type != question.type and question.answer_set.exists():
+            return Response(
+                {"success": False, "error": "Candidates have already answered this question, so its type can't be changed. Add a new question instead."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = QuestionSerializer(question, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
