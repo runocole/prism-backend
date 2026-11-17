@@ -481,9 +481,10 @@ class SessionListView(APIView):
     def get(self, request):
         from .services import finish_out_of_time_sessions
         finish_out_of_time_sessions()
+        from .services import right_answers
         sessions = Session.objects.select_related(
             "invite__test", "invite", "invite__job", "reviewed_by"
-        ).order_by("-started_at")
+        ).prefetch_related("answers__question").order_by("-started_at")
         job = request.query_params.get("job")
         if job == "none":
             sessions = sessions.filter(invite__job__isnull=True)
@@ -510,6 +511,8 @@ class SessionListView(APIView):
                 "outcome_email_kind": s.outcome_email_kind,
                 "outcome_emailed_at": s.outcome_emailed_at,
                 "attendance_confirmed_at": s.attendance_confirmed_at,
+                "right_answers": right_answers(s)[0],
+                "possible_answers": right_answers(s)[1],
             }
             for s in sessions
         ]

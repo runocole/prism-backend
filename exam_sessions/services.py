@@ -78,6 +78,25 @@ def finish_out_of_time_sessions():
             submit_session(session)
 
 
+def right_answers(session: Session) -> tuple[int, int]:
+    """
+    (right, possible) for the "7/11" on result cards: each MCQ and right/wrong
+    question counts once, each row of a list question counts once.
+    Written answers (short answer, yes/no) are scored in points instead.
+    """
+    right = possible = 0
+    for a in session.answers.all():
+        q = a.question
+        if q.type in ("mcq", "right_wrong"):
+            possible += 1
+            right += 1 if a.is_correct else 0
+        elif q.type == "list":
+            count = int((q.payload or {}).get("count") or 1)
+            possible += count
+            right += sum(1 for m in (a.item_marks or [])[:count] if m)
+    return right, possible
+
+
 def session_score_pct(session: Session) -> float:
     total_points = session.invite.test.total_points
     earned = sum((a.auto_score or 0) + (a.manual_score or 0) for a in session.answers.all())
