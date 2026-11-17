@@ -318,3 +318,17 @@ class QuestionTypeChangeTests(SectionsAndMarkingTests):
         # already answered: refused
         r = self.hr.patch(f"{url}{self.lst.id}/", {"type": "short_answer", "payload": {"word_limit": 300}}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+class YesNoQuestionTests(SectionsAndMarkingTests):
+    def test_yes_no_with_follow_up(self):
+        url = f"/api/v1/assessments/{self.test.id}/questions/"
+        ok = self.hr.post(url, {"type": "yes_no", "body": "Are you learning any new skills now?", "points": 2,
+                                "payload": {"follow_up_on": "yes", "follow_up_prompt": "If yes, tell us.", "min_chars": 10}}, format="json")
+        self.assertEqual(ok.status_code, 201, ok.content)
+        bad = self.hr.post(url, {"type": "yes_no", "body": "x", "points": 1, "payload": {"follow_up_on": "maybe"}}, format="json")
+        self.assertEqual(bad.status_code, 400)
+        # the candidate sees the follow-up question (it isn't an answer key)
+        qs = self.client.get(f"/api/v1/sessions/{self.session.id}/questions/", HTTP_X_INVITE_TOKEN=str(self.invite.token)).json()["data"]
+        yn = [q for q in qs if q["type"] == "yes_no"][0]
+        self.assertEqual(yn["payload"]["follow_up_prompt"], "If yes, tell us.")

@@ -43,6 +43,10 @@ class QuestionSerializer(serializers.ModelSerializer):
                     {"payload": "Short answer requires a word_limit."}
                 )
 
+        if q_type == Question.Type.YES_NO:
+            if payload.get("follow_up_on", "") not in ("", "yes", "no"):
+                raise serializers.ValidationError({"payload": "The follow-up must open on Yes, No, or not at all."})
+
         if q_type == Question.Type.LIST:
             try:
                 count = int(payload.get("count", 0))

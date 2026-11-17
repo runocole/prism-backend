@@ -78,6 +78,9 @@ class Question(models.Model):
         SHORT_ANSWER = "short_answer", "Short Answer / Essay"
         LIST = "list", "List (numbered answers)"     # payload: {"count": 5}
         RIGHT_WRONG = "right_wrong", "Right / wrong"   # payload: {"answer": "625" (optional), "answer_type": "text"|"number"}
+        # Yes / No, with a follow-up box when they pick the trigger answer:
+        # payload {"follow_up_on": "yes"|"no"|"", "follow_up_prompt": "If yes, tell us", "min_chars": 0}
+        YES_NO = "yes_no", "Yes / No (+ follow-up)"
 
     test = models.ForeignKey(
         Test, on_delete=models.CASCADE, related_name="questions"
