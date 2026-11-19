@@ -626,6 +626,20 @@ class RecordingStreamView(APIView):
         return response
 
 
+class EndSessionView(APIView):
+    """HR: end a test that's still open and send it to Results (saved answers are kept)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from .services import end_session
+        session = Session.objects.select_related("invite__test").filter(pk=pk).first()
+        if not session:
+            return Response({"success": False, "error": "Session not found."}, status=404)
+        if not end_session(session):
+            return Response({"success": False, "error": "This test has already finished."}, status=400)
+        return success({"status": "submitted", "answered": session.answers.count()})
+
+
 class AddTimeView(APIView):
     """
     HR: POST {"minutes": 10}

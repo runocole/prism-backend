@@ -68,6 +68,20 @@ def submit_session(session: Session):
     # Run MCQ auto-scoring
     score_session(session)
 
+def end_session(session: Session) -> bool:
+    """
+    HR ends a test that's still open (candidate left, ran out of time while away,
+    or never got started from the waiting room). Their saved answers are kept and
+    the test goes to Results. Returns False if it had already finished.
+    """
+    if session.status not in (Session.Status.WAITING, Session.Status.IN_PROGRESS):
+        return False
+    session.status = Session.Status.TIMED_OUT
+    session.save(update_fields=["status"])
+    submit_session(session)
+    return True
+
+
 def finish_out_of_time_sessions():
     """Submit every running test whose time is up (candidate closed the page or lost connection)."""
     running = Session.objects.filter(status=Session.Status.IN_PROGRESS).select_related("invite__test")

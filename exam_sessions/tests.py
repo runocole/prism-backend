@@ -352,3 +352,30 @@ class WaveTests(TestCase):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()["data"]["invites"][0]["wave"], 2)
         self.assertEqual(Invite.objects.get().wave, 2)
+
+
+class EndSessionTests(TestCase):
+    def test_hr_can_end_an_open_test_and_it_reaches_results(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from rest_framework.test import APIClient
+        from users.models import User
+        client = APIClient()
+        client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        test = Test.objects.create(title="BDE", duration_mins=40)
+        a = Invite.objects.create(test=test, candidate_name="Stuck One", candidate_email="s1@example.com", status="active")
+        s1 = Session.objects.create(invite=a, status=Session.Status.IN_PROGRESS)
+        b = Invite.objects.create(test=test, candidate_name="Waiting One", candidate_email="s2@example.com", status="active")
+        s2 = Session.objects.create(invite=b, status=Session.Status.WAITING)
+
+        r = client.post(f"/api/v1/sessions/{s1.id}/end/")
+        self.assertEqual(r.status_code, 200, r.content)
+        s1.refresh_from_db(); a.refresh_from_db()
+        self.assertEqual((s1.status, a.status), ("submitted", "submitted"))
+        self.assertEqual(client.post(f"/api/v1/sessions/{s1.id}/end/").status_code, 400)
+
+        out = StringIO()
+        call_command("end_open_tests", "--email", "s2@example.com", stdout=out)
+        s2.refresh_from_db()
+        self.assertEqual(s2.status, "submitted")
+        self.assertIn("Ended 1", out.getvalue())
