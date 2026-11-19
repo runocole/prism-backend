@@ -401,3 +401,60 @@ class StaleInviteLabelTests(TestCase):
         inv.refresh_from_db()
         self.assertEqual(inv.status, "submitted")
         self.assertIn("Fixed 1", out.getvalue())
+
+
+CV_TMP = tempfile.mkdtemp(prefix="pas-tests-cv-")
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+                   MEDIA_ROOT=CV_TMP + "/media", PRIVATE_MEDIA_ROOT=CV_TMP + "/private", STORAGE_ENDPOINT_URL="")
+class CandidateUpdateEmailTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from users.models import User
+        self.client = APIClient()
+        self.client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        self.test = Test.objects.create(title="BDE", duration_mins=40)
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(CV_TMP, ignore_errors=True)
+
+    def _session(self, email, **kw):
+        inv = Invite.objects.create(test=self.test, candidate_name="Ada Obi", candidate_email=email, status="active")
+        return Session.objects.create(invite=inv, status=Session.Status.IN_PROGRESS, **kw)
+
+    def test_submit_sends_one_received_email(self):
+        from unittest import mock
+        from .services import submit_session
+        s = self._session("ada@example.com")
+        with mock.patch("config.background.run_in_background", lambda fn, *a, **k: fn(*a, **k)):
+            submit_session(s)
+            submit_session(Session.objects.get(pk=s.pk))  # second call: no second email
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("received your assessment", mail.outbox[0].subject)
+        self.assertIsNotNone(Session.objects.get(pk=s.pk).received_emailed_at)
+
+    def test_update_email_only_for_undecided(self):
+        from unittest import mock
+        waiting = self._session("a@example.com")
+        Session.objects.filter(pk=waiting.pk).update(status=Session.Status.SUBMITTED)
+        decided = self._session("b@example.com")
+        Session.objects.filter(pk=decided.pk).update(status=Session.Status.REVIEWED, decision="fail")
+        with mock.patch("exam_sessions.views.run_in_background", lambda fn, *a, **k: fn(*a, **k)):
+            r = self.client.post("/api/v1/sessions/outcome-emails/", {"pending": [waiting.pk, decided.pk]}, format="json")
+        self.assertEqual(r.status_code, 202, r.content)
+        self.assertEqual(r.json()["data"]["pending"], 1)
+        self.assertEqual([m.to for m in mail.outbox], [["a@example.com"]])
+        self.assertIsNotNone(Session.objects.get(pk=waiting.pk).update_emailed_at)
+
+    def test_review_page_has_cv_link(self):
+        from jobs.models import Application, JobPost
+        job = JobPost.objects.create(title="BDE")
+        s = self._session("ada@example.com")
+        Invite.objects.filter(pk=s.invite_id).update(job=job)
+        Application.objects.create(job=job, email="ADA@example.com", first_name="Ada", last_name="Obi",
+                                   cv=SimpleUploadedFile("cv.pdf", b"%PDF-1.4"))
+        d = self.client.get(f"/api/v1/sessions/{s.pk}/").json()["data"]
+        self.assertTrue(d["cv_url"] and d["cv_url"].endswith(".pdf"), d["cv_url"])

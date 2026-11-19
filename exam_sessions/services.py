@@ -68,6 +68,12 @@ def submit_session(session: Session):
     # Run MCQ auto-scoring
     score_session(session)
 
+    # "Thank you, we've received your assessment" — once per session
+    if Session.objects.filter(pk=session.pk, received_emailed_at__isnull=True).update(received_emailed_at=timezone.now()):
+        from config.background import run_in_background
+        from .emails import send_received_email
+        run_in_background(send_received_email, session.pk)
+
 def end_session(session: Session) -> bool:
     """
     HR ends a test that's still open (candidate left, ran out of time while away,

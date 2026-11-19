@@ -56,6 +56,9 @@ class Session(models.Model):
     # Result email sent to the candidate after the decision ("passed" / "failed")
     outcome_email_kind = models.CharField(max_length=10, blank=True)
     outcome_emailed_at = models.DateTimeField(null=True, blank=True)
+    # "We've received your assessment" (sent on submit) / last "still reviewing" update from HR
+    received_emailed_at = models.DateTimeField(null=True, blank=True)
+    update_emailed_at = models.DateTimeField(null=True, blank=True)
     # Next-stage details sent to a passed candidate, and their confirmation
     interview_details = models.JSONField(default=dict, blank=True)
     attendance_confirmed_at = models.DateTimeField(null=True, blank=True)

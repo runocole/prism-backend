@@ -56,6 +56,7 @@ class SessionSerializer(serializers.ModelSerializer):
     job_id = serializers.IntegerField(source="invite.job_id", read_only=True)
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True, default=None)
     graded_by_name = serializers.CharField(read_only=True)
+    cv_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -64,8 +65,20 @@ class SessionSerializer(serializers.ModelSerializer):
             "status", "started_at", "submitted_at", "remaining_seconds",
             "recording_path", "violation_count", "answers", "violations",
             "decision", "decision_notes", "score_pct", "reviewed_by_email", "reviewed_at",
-            "graded_by_name", "attendance_confirmed_at",
+            "graded_by_name", "attendance_confirmed_at", "cv_url",
         )
+
+    def get_cv_url(self, obj):
+        """The candidate's CV from their job application (same job first, else their latest)."""
+        from jobs.models import Application
+        invite = obj.invite
+        apps = Application.objects.filter(email__iexact=invite.candidate_email).exclude(cv="")
+        app = (apps.filter(job_id=invite.job_id).first() if invite.job_id else None) or apps.order_by("-id").first()
+        if not app or not app.cv:
+            return None
+        url = app.cv.url
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request and url.startswith("/") else url
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

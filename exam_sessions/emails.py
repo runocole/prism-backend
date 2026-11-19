@@ -87,6 +87,64 @@ def send_failed(session: Session) -> bool:
     )
 
 
+def _received_paragraphs(session: Session, role: str) -> list[str]:
+    return [
+        f"Dear {session.invite.candidate_name},",
+        f"Thank you so much for taking the assessment for the {role} role at {settings.COMPANY_NAME}. "
+        "We've received your answers.",
+        "Our team is now reviewing every submission carefully. We'll get back to you by email as soon as "
+        "the review is complete.",
+        "There's nothing else you need to do for now.",
+    ]
+
+
+def send_received_email(session_id: int) -> bool:
+    """Sent the moment a candidate submits (background). Clears the flag if it fails."""
+    session = Session.objects.select_related("invite__test", "invite__job").filter(pk=session_id).first()
+    if not session:
+        return False
+    role = _role(session)
+    ok = send_branded(
+        session.invite.candidate_email,
+        f"We've received your assessment – {settings.COMPANY_NAME}",
+        eyebrow="Assessment received",
+        heading=f"Thank you, {_first_name(session)}!",
+        preheader="We've received your assessment and will be in touch.",
+        paragraphs=_received_paragraphs(session, role),
+        stage=2,
+    )
+    if not ok:
+        Session.objects.filter(pk=session_id).update(received_emailed_at=None)
+    return ok
+
+
+def send_review_update(session: Session) -> bool:
+    """HR's "still reviewing" update for candidates without a result yet."""
+    role = _role(session)
+    return send_branded(
+        session.invite.candidate_email,
+        f"Update on your assessment – {settings.COMPANY_NAME}",
+        eyebrow="Application update",
+        heading=f"Thank you for your patience, {_first_name(session)}",
+        preheader="Your assessment is still being reviewed.",
+        paragraphs=[
+            f"Dear {session.invite.candidate_name},",
+            f"Thank you so much for taking the assessment for the {role} role at {settings.COMPANY_NAME}.",
+            "We're still reviewing the assessments and haven't finished yours yet. We'll get back to you with "
+            "an update as soon as the review is complete.",
+            "We appreciate your patience and your interest in joining our team.",
+        ],
+        stage=2,
+    )
+
+
+def send_review_updates(session_ids: list[int]):
+    for sid in session_ids:
+        session = Session.objects.select_related("invite__test", "invite__job").filter(pk=sid).first()
+        if session and send_review_update(session):
+            Session.objects.filter(pk=session.pk).update(update_emailed_at=timezone.now())
+
+
 def send_outcome_emails(passed: list[dict], failed_ids: list[int], address: str, notes: str, include_remarks: bool = False):
     """
     passed: [{"session_id": 1, "date": "Monday, 10 November 2026", "time": "10:00 AM"}, ...]

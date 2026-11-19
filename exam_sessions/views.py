@@ -43,7 +43,7 @@ from .serializers import (
 )
 from .services import submit_session
 from . import livekit
-from .emails import send_outcome_emails
+from .emails import send_outcome_emails, send_review_updates
 from .storage import upload_file, read_file, recording_chunk_keys, iter_recording, assemble_recording
 from config.background import run_in_background
 
@@ -510,6 +510,8 @@ class SessionListView(APIView):
                 "decision_notes": s.decision_notes,
                 "outcome_email_kind": s.outcome_email_kind,
                 "outcome_emailed_at": s.outcome_emailed_at,
+                "received_emailed_at": s.received_emailed_at,
+                "update_emailed_at": s.update_emailed_at,
                 "attendance_confirmed_at": s.attendance_confirmed_at,
                 "right_answers": right_answers(s)[0],
                 "possible_answers": right_answers(s)[1],
@@ -760,6 +762,7 @@ class OutcomeEmailView(APIView):
     def post(self, request):
         passed_in = request.data.get("passed") or []
         failed_in = request.data.get("failed") or []
+        pending_in = request.data.get("pending") or []
         address = str(request.data.get("address") or "").strip()
         notes = str(request.data.get("notes") or "")[:3000]
 
@@ -779,11 +782,19 @@ class OutcomeEmailView(APIView):
         ok_passed = set(Session.objects.filter(pk__in=[p["session_id"] for p in passed], decision="pass").values_list("id", flat=True))
         ok_failed = list(Session.objects.filter(pk__in=[int(i) for i in failed_in if str(i).isdigit()], decision="fail").values_list("id", flat=True))
         passed = [p for p in passed if p["session_id"] in ok_passed]
-        if not passed and not ok_failed:
+        # "Still reviewing" update: finished tests with no pass/fail yet (hold counts as no result)
+        ok_pending = list(Session.objects.filter(
+            pk__in=[int(i) for i in pending_in if str(i).isdigit()],
+            status__in=[Session.Status.SUBMITTED, Session.Status.TIMED_OUT, Session.Status.REVIEWED],
+        ).exclude(decision__in=["pass", "fail"]).values_list("id", flat=True))
+        if not passed and not ok_failed and not ok_pending:
             return Response({"success": False, "error": "No candidates to email."}, status=400)
 
-        run_in_background(send_outcome_emails, passed, ok_failed, address, notes, bool(request.data.get("include_remarks", True)))
-        return success({"passed": len(passed), "failed": len(ok_failed)}, status.HTTP_202_ACCEPTED)
+        if passed or ok_failed:
+            run_in_background(send_outcome_emails, passed, ok_failed, address, notes, bool(request.data.get("include_remarks", True)))
+        if ok_pending:
+            run_in_background(send_review_updates, ok_pending)
+        return success({"passed": len(passed), "failed": len(ok_failed), "pending": len(ok_pending)}, status.HTTP_202_ACCEPTED)
 
 
 class ReviewAnswerView(APIView):
