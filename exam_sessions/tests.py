@@ -379,3 +379,25 @@ class EndSessionTests(TestCase):
         s2.refresh_from_db()
         self.assertEqual(s2.status, "submitted")
         self.assertIn("Ended 1", out.getvalue())
+
+
+class StaleInviteLabelTests(TestCase):
+    def test_finished_test_shows_and_becomes_submitted(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from rest_framework.test import APIClient
+        from users.models import User
+        client = APIClient()
+        client.force_authenticate(User.objects.create_user("hr@example.com", "pw-12345678"))
+        test = Test.objects.create(title="BDE", duration_mins=40)
+        inv = Invite.objects.create(test=test, candidate_name="Joshua", candidate_email="j@example.com", status="active")
+        Session.objects.create(invite=inv, status=Session.Status.SUBMITTED)
+        # shown as submitted straight away
+        row = [i for i in client.get("/api/v1/invites/").json()["data"] if i["id"] == inv.id][0]
+        self.assertEqual(row["status"], "submitted")
+        # and repaired in the database
+        out = StringIO()
+        call_command("end_open_tests", "--fix-labels", stdout=out)
+        inv.refresh_from_db()
+        self.assertEqual(inv.status, "submitted")
+        self.assertIn("Fixed 1", out.getvalue())

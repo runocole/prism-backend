@@ -20,6 +20,14 @@ class InviteSerializer(serializers.ModelSerializer):
         session = getattr(obj, "session", None)
         return session.id if session else None
 
+    def to_representation(self, obj):
+        data = super().to_representation(obj)
+        # A finished test is "submitted", whatever the invite's own label says
+        session = getattr(obj, "session", None)
+        if session is not None and session.status in ("submitted", "timed_out", "reviewed"):
+            data["status"] = "submitted"
+        return data
+
     class Meta:
         model = Invite
         fields = (

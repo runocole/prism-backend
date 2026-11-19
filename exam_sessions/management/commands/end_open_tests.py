@@ -5,12 +5,13 @@ they go to Results with whatever the candidate saved.
     python manage.py end_open_tests                  # just list them
     python manage.py end_open_tests --email a@b.com  # end that candidate's open test
     python manage.py end_open_tests --all            # end every open test
+    python manage.py end_open_tests --fix-labels     # finished tests whose invite still says Active
 """
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from exam_sessions.models import Session
-from exam_sessions.services import end_session
+from exam_sessions.services import end_session, fix_finished_invite_labels
 
 
 class Command(BaseCommand):
@@ -19,8 +20,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--email", help="End the open test of this candidate")
         parser.add_argument("--all", action="store_true", help="End every open test")
+        parser.add_argument("--fix-labels", action="store_true", help="Mark invites of finished tests as submitted")
 
     def handle(self, *args, **opts):
+        if opts["fix_labels"]:
+            n = fix_finished_invite_labels()
+            self.stdout.write(self.style.SUCCESS(f"Fixed {n} invite label(s): finished tests now show as Submitted."))
+            return
         open_tests = Session.objects.filter(
             status__in=[Session.Status.WAITING, Session.Status.IN_PROGRESS],
         ).select_related("invite__test")

@@ -82,6 +82,14 @@ def end_session(session: Session) -> bool:
     return True
 
 
+def fix_finished_invite_labels() -> int:
+    """Invites still labelled pending/active/expired although their test has finished → 'submitted'."""
+    from invites.models import Invite
+    return Invite.objects.filter(
+        session__status__in=[Session.Status.SUBMITTED, Session.Status.TIMED_OUT, Session.Status.REVIEWED],
+    ).exclude(status=Invite.Status.SUBMITTED).update(status=Invite.Status.SUBMITTED)
+
+
 def finish_out_of_time_sessions():
     """Submit every running test whose time is up (candidate closed the page or lost connection)."""
     running = Session.objects.filter(status=Session.Status.IN_PROGRESS).select_related("invite__test")
@@ -90,6 +98,7 @@ def finish_out_of_time_sessions():
             session.status = Session.Status.TIMED_OUT
             session.save(update_fields=["status"])
             submit_session(session)
+    fix_finished_invite_labels()
 
 
 def right_answers(session: Session) -> tuple[int, int]:
