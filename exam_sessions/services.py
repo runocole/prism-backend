@@ -70,9 +70,11 @@ def submit_session(session: Session):
 
     # "Thank you, we've received your assessment" — once per session
     if Session.objects.filter(pk=session.pk, received_emailed_at__isnull=True).update(received_emailed_at=timezone.now()):
+        from django.db import transaction
         from config.background import run_in_background
         from .emails import send_received_email
-        run_in_background(send_received_email, session.pk)
+        sid = session.pk
+        transaction.on_commit(lambda: run_in_background(send_received_email, sid))
 
 def end_session(session: Session) -> bool:
     """

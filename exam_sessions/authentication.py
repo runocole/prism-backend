@@ -52,6 +52,17 @@ class InviteTokenAuthentication(BaseAuthentication):
                 invite.save(update_fields=["status"])
             return (invite, invite)
 
+        # The final answer save may land just after the test closed: allow only the
+        # draft endpoint, for 2 minutes, before anyone has reviewed it.
+        if request.path.rstrip("/").endswith("/draft"):
+            from datetime import timedelta
+            just_ended = Session.objects.filter(
+                invite=invite, status__in=[Session.Status.SUBMITTED, Session.Status.TIMED_OUT],
+                submitted_at__gte=timezone.now() - timedelta(seconds=120), decision="",
+            ).exists()
+            if just_ended:
+                return (invite, invite)
+
         # Only pending or active invites can be used
         if invite.status not in (Invite.Status.PENDING, Invite.Status.ACTIVE):
             raise AuthenticationFailed(

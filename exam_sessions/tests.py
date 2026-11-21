@@ -429,7 +429,7 @@ class CandidateUpdateEmailTests(TestCase):
         from unittest import mock
         from .services import submit_session
         s = self._session("ada@example.com")
-        with mock.patch("config.background.run_in_background", lambda fn, *a, **k: fn(*a, **k)):
+        with mock.patch("config.background.run_in_background", lambda fn, *a, **k: fn(*a, **k)),                 self.captureOnCommitCallbacks(execute=True):
             submit_session(s)
             submit_session(Session.objects.get(pk=s.pk))  # second call: no second email
         self.assertEqual(len(mail.outbox), 1)
@@ -458,3 +458,36 @@ class CandidateUpdateEmailTests(TestCase):
                                    cv=SimpleUploadedFile("cv.pdf", b"%PDF-1.4"))
         d = self.client.get(f"/api/v1/sessions/{s.pk}/").json()["data"]
         self.assertTrue(d["cv_url"] and d["cv_url"].endswith(".pdf"), d["cv_url"])
+
+
+class LateFinalSaveTests(TestCase):
+    """The last few seconds of typing must not be lost when the test closes."""
+
+    def setUp(self):
+        from assessments.models import Question
+        test = Test.objects.create(title="BDE", duration_mins=40)
+        self.q = Question.objects.create(test=test, type="short_answer", body="Why sales?", points=5)
+        self.invite = Invite.objects.create(test=test, candidate_name="Ada", candidate_email="a@example.com", status="active")
+        self.session = Session.objects.create(invite=self.invite, status=Session.Status.IN_PROGRESS)
+
+    def _save(self, text):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.credentials(HTTP_X_INVITE_TOKEN=str(self.invite.token))
+        return c.post(f"/api/v1/sessions/{self.session.pk}/draft/",
+                      {"answers": [{"question_id": self.q.pk, "response": {"text": text}}]}, format="json")
+
+    def test_save_just_after_end_is_kept(self):
+        from unittest import mock
+        from datetime import timedelta
+        from django.utils import timezone
+        from .services import submit_session
+        long_text = "word " * 2000
+        with mock.patch("config.background.run_in_background"):
+            submit_session(self.session)
+        r = self._save(long_text)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.session.answers.get().response["text"], long_text)  # nothing cut
+        # but not minutes later
+        Session.objects.filter(pk=self.session.pk).update(submitted_at=timezone.now() - timedelta(minutes=5))
+        self.assertIn(self._save("changed").status_code, (400, 403))

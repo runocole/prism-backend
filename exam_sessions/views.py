@@ -41,7 +41,7 @@ from .serializers import (
     ViolationSerializer,
     ReviewScoreSerializer,
 )
-from .services import submit_session
+from .services import submit_session, score_session
 from . import livekit
 from .emails import send_outcome_emails, send_review_updates
 from .storage import upload_file, read_file, recording_chunk_keys, iter_recording, assemble_recording
@@ -136,6 +136,9 @@ class SessionQuestionsView(APIView):
         return success(data)
 
 
+DRAFT_GRACE_SECONDS = 120
+
+
 class SaveDraftView(APIView):
     """
     Auto-save endpoint — called every 2 minutes by the frontend.
@@ -152,7 +155,15 @@ class SaveDraftView(APIView):
                 {"success": False, "error": "Session not found."}, status=404
             )
 
-        if session.status != Session.Status.IN_PROGRESS:
+        # The last save can arrive a moment after the time ran out (or after the server
+        # closed the test). Accept it for 2 minutes, until someone has reviewed it.
+        just_ended = (
+            session.status in (Session.Status.SUBMITTED, Session.Status.TIMED_OUT)
+            and session.submitted_at
+            and timezone.now() - session.submitted_at <= timedelta(seconds=DRAFT_GRACE_SECONDS)
+            and not session.decision
+        )
+        if session.status != Session.Status.IN_PROGRESS and not just_ended:
             return Response(
                 {"success": False, "error": "Session is no longer active."},
                 status=400,
@@ -176,6 +187,8 @@ class SaveDraftView(APIView):
             )
             saved += 1
 
+        if just_ended:
+            score_session(session)  # re-mark MCQs that changed in the late save
         return success({"saved": saved})
 
 
